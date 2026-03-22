@@ -1,0 +1,26 @@
+
+> backend@1.0.0 start
+> node src/index.js
+
+[1G[0Kserver listening on port 8080
+new user : 11448bda-770d-4a70-b3f1-7887fa5054ec
+user created room 11448bda-770d-4a70-b3f1-7887fa5054ec
+host 11448bda-770d-4a70-b3f1-7887fa5054ec disconnected — starting 90s grace period
+new user : f09232e8-0d0c-4cfe-a89a-b8e0e9698883
+host 11448bda-770d-4a70-b3f1-7887fa5054ec reconnected
+host 11448bda-770d-4a70-b3f1-7887fa5054ec disconnected — starting 90s grace period
+new user : 2c98604c-e80a-43fa-8e35-8ffdd3d1231e
+user created room 2c98604c-e80a-43fa-8e35-8ffdd3d1231e
+host 2c98604c-e80a-43fa-8e35-8ffdd3d1231e disconnected — starting 90s grace period
+new user : 112a2ed7-ec4d-4e9b-91db-e07b1be8d490
+user created room 112a2ed7-ec4d-4e9b-91db-e07b1be8d490
+new user : 060b6ea2-8fd5-4101-b76a-92fe84b0f823
+room 11448bda-770d-4a70-b3f1-7887fa5054ec closed
+member 060b6ea2-8fd5-4101-b76a-92fe84b0f823 joined room 112a2ed7-ec4d-4e9b-91db-e07b1be8d490
+room 2c98604c-e80a-43fa-8e35-8ffdd3d1231e closed
+member 060b6ea2-8fd5-4101-b76a-92fe84b0f823 disconnected
+new user : e38a3573-962a-4a98-9bf6-0be8f66e7bd5
+member e38a3573-962a-4a98-9bf6-0be8f66e7bd5 joined room 112a2ed7-ec4d-4e9b-91db-e07b1be8d490
+member e38a3573-962a-4a98-9bf6-0be8f66e7bd5 disconnected
+host 112a2ed7-ec4d-4e9b-91db-e07b1be8d490 disconnected — starting 90s grace period
+room 112a2ed7-ec4d-4e9b-91db-e07b1be8d490 closed

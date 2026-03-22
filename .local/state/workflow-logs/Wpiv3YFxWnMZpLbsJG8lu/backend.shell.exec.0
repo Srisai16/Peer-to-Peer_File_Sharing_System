@@ -1,0 +1,56 @@
+
+> backend@1.0.0 start
+> node src/index.js
+
+[1G[0Kserver listening on port 8080
+new user : 1c6edd5d-bc0d-4e3a-9a34-6ea73aaa8f1d
+member 1c6edd5d-bc0d-4e3a-9a34-6ea73aaa8f1d disconnected
+new user : 3bff4046-1e00-485f-9754-b3624cca25d1
+user created room 3bff4046-1e00-485f-9754-b3624cca25d1
+host 3bff4046-1e00-485f-9754-b3624cca25d1 disconnected
+new user : ac0488ad-c0e7-4d7f-a72b-565650ea5a05
+new user : 3e2fa66d-08e7-4eb2-8936-7f6f512b36fe
+user created room 3e2fa66d-08e7-4eb2-8936-7f6f512b36fe
+member ac0488ad-c0e7-4d7f-a72b-565650ea5a05 joined room 3e2fa66d-08e7-4eb2-8936-7f6f512b36fe
+host 3e2fa66d-08e7-4eb2-8936-7f6f512b36fe disconnected
+member ac0488ad-c0e7-4d7f-a72b-565650ea5a05 disconnected
+new user : f1297710-52fb-4502-9cf6-94d0bd4b92ae
+new user : 0985ce3f-532d-42a4-9b47-80a7a02ddafd
+user created room 0985ce3f-532d-42a4-9b47-80a7a02ddafd
+host 0985ce3f-532d-42a4-9b47-80a7a02ddafd disconnected
+new user : ffeaf7a3-8220-4683-81e3-bf9f7416263b
+user created room ffeaf7a3-8220-4683-81e3-bf9f7416263b
+member f1297710-52fb-4502-9cf6-94d0bd4b92ae joined room ffeaf7a3-8220-4683-81e3-bf9f7416263b
+host ffeaf7a3-8220-4683-81e3-bf9f7416263b disconnected
+member f1297710-52fb-4502-9cf6-94d0bd4b92ae disconnected
+new user : e79c60e2-1eca-4625-94e8-1ddd8d3b42db
+member e79c60e2-1eca-4625-94e8-1ddd8d3b42db disconnected
+new user : dc1479a2-a3ef-4810-9a03-762624a8c37f
+member dc1479a2-a3ef-4810-9a03-762624a8c37f disconnected
+new user : 4b885ccb-b2ec-4280-b220-a477db297f54
+user created room 4b885ccb-b2ec-4280-b220-a477db297f54
+new user : 30efae1a-eaa4-480b-a852-ef2701df2cf1
+member 30efae1a-eaa4-480b-a852-ef2701df2cf1 joined room 4b885ccb-b2ec-4280-b220-a477db297f54
+member 30efae1a-eaa4-480b-a852-ef2701df2cf1 disconnected
+new user : d1fa1812-0ac5-4ebe-a0ee-4ea25d3055e9
+member d1fa1812-0ac5-4ebe-a0ee-4ea25d3055e9 disconnected
+new user : 2a416ea7-3c52-49e2-a7db-2d019723f642
+member 2a416ea7-3c52-49e2-a7db-2d019723f642 joined room 4b885ccb-b2ec-4280-b220-a477db297f54
+member 2a416ea7-3c52-49e2-a7db-2d019723f642 disconnected
+new user : e1f45a3f-2b64-4f4c-9054-becd76b6e086
+member e1f45a3f-2b64-4f4c-9054-becd76b6e086 joined room 4b885ccb-b2ec-4280-b220-a477db297f54
+new user : 944ecdda-71b7-46c4-889b-563268d874d2
+member 944ecdda-71b7-46c4-889b-563268d874d2 disconnected
+new user : 1db40f65-35ba-4461-8f7f-0f940ca70387
+member e1f45a3f-2b64-4f4c-9054-becd76b6e086 disconnected
+member 1db40f65-35ba-4461-8f7f-0f940ca70387 disconnected
+new user : 1736950a-93f1-496e-a439-4af6e8026a8b
+host 4b885ccb-b2ec-4280-b220-a477db297f54 disconnected
+new user : 2129f9b5-de0d-4f61-857c-8ee07349623a
+user created room 2129f9b5-de0d-4f61-857c-8ee07349623a
+member 1736950a-93f1-496e-a439-4af6e8026a8b disconnected
+host 2129f9b5-de0d-4f61-857c-8ee07349623a disconnected
+new user : 993ac167-77b3-421b-af4b-88e308be9604
+user created room 993ac167-77b3-421b-af4b-88e308be9604
+new user : 2fd6ad24-c5b2-4d7f-80e7-284a0679091d
+member 2fd6ad24-c5b2-4d7f-80e7-284a0679091d disconnected

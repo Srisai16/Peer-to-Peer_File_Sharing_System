@@ -1,0 +1,274 @@
+Below is a **ready-to-paste prompt for Replit AI / Ghostwriter / Agent** to **deploy, improve, and scale your WebRTC P2P file sharing app** based on your repo:
+
+**Repo:**
+[https://github.com/Srisai16/Peer-to-Peer_File_Sharing_System.git](https://github.com/Srisai16/Peer-to-Peer_File_Sharing_System.git)
+
+You can paste this **entire prompt into Replit AI** so it modifies the project automatically.
+
+---
+
+# Prompt for Replit AI
+
+You are an expert full-stack and WebRTC engineer. Analyze this repository and improve it so the application can be deployed and tested publicly with multiple peers.
+
+Repository:
+[https://github.com/Srisai16/Peer-to-Peer_File_Sharing_System.git](https://github.com/Srisai16/Peer-to-Peer_File_Sharing_System.git)
+
+The project is a WebRTC peer-to-peer file sharing system using:
+
+* React + Vite frontend
+* Node.js WebSocket signaling server
+* WebRTC DataChannels
+
+Your task is to modify and improve the project with the following goals.
+
+---
+
+## 1. Deployment Setup (Replit Compatible)
+
+Configure the project so it runs on Replit and can be accessed by multiple users over the internet.
+
+Requirements:
+
+* Run signaling server on environment port using:
+
+```javascript
+const PORT = process.env.PORT || 8080;
+```
+
+* Bind server to:
+
+```javascript
+0.0.0.0
+```
+
+* Configure WebSocket URL dynamically in frontend:
+
+```javascript
+const WS_URL =
+  window.location.protocol === "https:"
+    ? "wss://" + window.location.host
+    : "ws://" + window.location.host;
+```
+
+* Remove hardcoded localhost URLs.
+
+* Ensure frontend builds correctly using:
+
+```
+npm run build
+```
+
+* Serve frontend from Node.js server if required.
+
+---
+
+## 2. Unlimited File Size Transfer
+
+Modify file transfer logic to support extremely large files (10GB+).
+
+Requirements:
+
+Replace FileReader logic with streaming:
+
+* Use `file.stream()` and `ReadableStream`
+* Send chunks sequentially
+* Prevent memory overflow
+
+Chunk transfer strategy:
+
+```javascript
+const CHUNK_SIZE = 64 * 1024;
+```
+
+Implement buffer control:
+
+```javascript
+while (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+  await new Promise(r => setTimeout(r, 10));
+}
+```
+
+Ensure the sender never overfills the WebRTC send buffer.
+
+---
+
+## 3. Folder Transfer Support
+
+Allow users to upload and share entire folders.
+
+Frontend changes:
+
+Use:
+
+```html
+<input type="file" webkitdirectory multiple>
+```
+
+Send metadata before chunks:
+
+```
+{
+ type: "file-meta",
+ name: file.name,
+ path: file.webkitRelativePath,
+ size: file.size
+}
+```
+
+Receiver reconstructs folder hierarchy.
+
+---
+
+## 4. Multiple Users Per Room
+
+Ensure file transfer works in rooms with multiple peers.
+
+Implement:
+
+* peerConnections map
+* dataChannels map
+
+Example structure:
+
+```
+peerConnections[peerId]
+dataChannels[peerId]
+```
+
+When a file is selected:
+
+```
+sendFile(file, dataChannels[peerId])
+```
+
+to each connected peer.
+
+---
+
+## 5. Faster File Transfer
+
+Improve transfer speed using:
+
+* optimal chunk size (64KB)
+* controlled buffering
+* asynchronous chunk streaming
+
+Avoid loading entire file into memory.
+
+---
+
+## 6. Resume Interrupted Transfers
+
+Add optional resume capability.
+
+Sender sends metadata:
+
+```
+{
+ fileName,
+ fileSize,
+ totalChunks,
+ chunkSize
+}
+```
+
+Receiver tracks received chunks.
+
+If connection drops, request missing chunks.
+
+---
+
+## 7. Frontend Redesign
+
+Improve UI using modern React design principles.
+
+Features to add:
+
+* drag-and-drop file upload
+* folder upload support
+* transfer progress bar
+* upload speed indicator
+* download progress indicator
+* list of peers in room
+* modern responsive layout
+
+Use:
+
+* TailwindCSS or modern CSS
+* clean component structure
+* responsive layout
+
+---
+
+## 8. Scalability Improvements
+
+Optimize the system so server load remains minimal.
+
+Server should handle only:
+
+* signaling
+* room management
+* peer discovery
+
+File transfer must remain peer-to-peer.
+
+---
+
+## 9. Security Improvements
+
+Add:
+
+* STUN server configuration
+
+Example:
+
+```
+iceServers: [
+ { urls: "stun:stun.l.google.com:19302" }
+]
+```
+
+---
+
+## 10. Testing Instructions
+
+After modifications:
+
+1. Deploy project on Replit
+2. Start signaling server
+3. Open app in two browsers
+4. Join same room
+5. Transfer large file
+
+Verify:
+
+* multiple peers connect
+* files transfer successfully
+* folder transfer works
+* large files stream without crash
+
+---
+
+## Expected Final Result
+
+The application should support:
+
+* WebRTC P2P transfer
+* unlimited file size
+* folder sharing
+* multi-user rooms
+* fast chunk streaming
+* scalable architecture
+* improved modern UI
+* deployment on Replit
+
+---
+
+# Tip
+
+After running this prompt, test with **two devices** (phone + laptop) using the Replit public URL.
+
+---
+
+If you want, I can also give you a **second prompt that upgrades your system to BitTorrent-style P2P sharing**, which can make transfers **3-10× faster than normal WebRTC systems**.

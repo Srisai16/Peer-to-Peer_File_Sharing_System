@@ -1,0 +1,14 @@
+[1G[0K⠙[1G[0K
+> backend@1.0.0 start
+> node src/index.js
+
+[1G[0K⠙[1G[0Kserver listening on port 8080
+new user : a044439e-cbdb-401e-9bf6-583deb60a9b2
+user created room a044439e-cbdb-401e-9bf6-583deb60a9b2
+host a044439e-cbdb-401e-9bf6-583deb60a9b2 disconnected — starting 90s grace period
+new user : d098d5e0-9d09-4b67-8b78-ae4a303192bf
+user created room d098d5e0-9d09-4b67-8b78-ae4a303192bf
+new user : 6be37f10-08fd-4970-a542-6a3a6d01a9f2
+member 6be37f10-08fd-4970-a542-6a3a6d01a9f2 joined room d098d5e0-9d09-4b67-8b78-ae4a303192bf
+room a044439e-cbdb-401e-9bf6-583deb60a9b2 closed
+member 6be37f10-08fd-4970-a542-6a3a6d01a9f2 disconnected

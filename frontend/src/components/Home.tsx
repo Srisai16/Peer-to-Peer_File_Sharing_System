@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import P2PVisual from "./P2PVisual";
 
 const features = [
   {

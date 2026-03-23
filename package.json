@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "dev": "cd frontend && npm run dev"
+    "dev": "cd frontend && npm run dev",
+    "build:dev": "cd frontend && npm run build",
+    "start": "cd backend && npm start"
   },
   "dependencies": {
     "framer-motion": "^12.38.0"

@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import P2PVisual from "./P2PVisual";
 
 const features = [
   {
@@ -76,8 +77,13 @@ const Home = () => {
             </motion.button>
           </div>
 
+          {/* Animated P2P Network Visual */}
+          <div className="mt-12 mb-4">
+            <P2PVisual />
+          </div>
+
           {/* Terminal-style status line */}
-          <div className="mt-16 font-mono text-xs text-cyber-darkgray border border-cyber-darkgray/40 p-3 text-left max-w-md mx-auto">
+          <div className="mt-6 font-mono text-xs text-cyber-darkgray border border-cyber-darkgray/40 p-3 text-left max-w-md mx-auto">
             <p><span className="text-neon-green/50">$</span> beamit --status</p>
             <p className="text-neon-green/40 mt-1">→ Protocol: WebRTC DataChannel</p>
             <p className="text-neon-green/40">→ Encryption: DTLS 1.3</p>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import Toggleable from "./Toggleable";
 import { getWsUrl } from "../utils/wsUrl";
 import { sendFileOverChannel, formatBytes, FileMeta, TransferControl } from "../utils/fileTransfer";
@@ -8,6 +9,7 @@ interface ChatMessage { senderId: string; text: string; timestamp: number; }
 interface Transfer {
   id: string; peerId: string; name: string; size: number;
   progress: number; direction: "send" | "receive"; status: "active" | "done" | "error"; paused: boolean;
+  speed?: number; startTime?: number;
 }
 interface PeerState { pc: RTCPeerConnection; dataChannel: RTCDataChannel; }
 
@@ -28,6 +30,8 @@ const Host = () => {
   const intentionalCloseRef = useRef(false);
   const sendControlsRef = useRef<Map<string, TransferControl>>(new Map());
   const recvCancelRef = useRef<Map<string, () => void>>(new Map());
+  const transferStartRef = useRef<Map<string, number>>(new Map());
+  const lastBytesRef = useRef<Map<string, { bytes: number; time: number }>>(new Map());
 
   const [hostId, setHostId] = useState("");
   const [members, setMembers] = useState<string[]>([]);
@@ -36,11 +40,30 @@ const Host = () => {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [copied, setCopied] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [logs, setLogs] = useState<{ time: string; text: string; type: "info" | "success" | "error" | "warn" }[]>([]);
   const dragCounterRef = useRef<{ [id: string]: number }>({});
   const [dragOver, setDragOver] = useState<{ [id: string]: boolean }>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
+
+  const addLog = useCallback((text: string, type: "info" | "success" | "error" | "warn" = "info") => {
+    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setLogs(prev => [...prev.slice(-50), { time, text, type }]);
+  }, []);
+
+  const calcSpeed = useCallback((tid: string, sentBytes: number) => {
+    const now = Date.now();
+    const last = lastBytesRef.current.get(tid);
+    if (last && now - last.time > 500) {
+      const speed = ((sentBytes - last.bytes) / ((now - last.time) / 1000));
+      lastBytesRef.current.set(tid, { bytes: sentBytes, time: now });
+      return speed;
+    }
+    if (!last) lastBytesRef.current.set(tid, { bytes: sentBytes, time: now });
+    return undefined;
+  }, []);
 
   const upsertTransfer = useCallback((t: Transfer) => {
     setTransfers((prev) => {
@@ -70,7 +93,9 @@ const Host = () => {
           meta = msg as FileMeta; buffers = []; receivedBytes = 0; cancelled = false;
           tid = `recv-${peerId}-${Date.now()}`;
           recvCancelRef.current.set(tid, cancelFn);
+          transferStartRef.current.set(tid, Date.now());
           upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: 0, direction: "receive", status: "active", paused: false });
+          addLog(`RECV ← ${meta.name} (${formatBytes(meta.size)})`, "info");
         } else if (msg.type === "EOF") {
           if (!cancelled && meta) {
             const blob = new Blob(buffers);
@@ -79,21 +104,26 @@ const Host = () => {
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             URL.revokeObjectURL(url);
             upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: 100, direction: "receive", status: "done", paused: false });
+            addLog(`RECV ✓ ${meta.name} complete`, "success");
           }
           meta = null; buffers = []; recvCancelRef.current.delete(tid);
         } else if (msg.type === "transfer-cancelled") {
           cancelled = true;
           if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
+          addLog(`RECV ✕ transfer cancelled`, "error");
           meta = null; buffers = [];
         }
       } else if (ev.data instanceof ArrayBuffer && !cancelled) {
         buffers.push(ev.data); receivedBytes += ev.data.byteLength;
-        if (meta) upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: Math.round((receivedBytes / meta.size) * 100), direction: "receive", status: "active", paused: false });
+        if (meta) {
+          const speed = calcSpeed(tid, receivedBytes);
+          upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: Math.round((receivedBytes / meta.size) * 100), direction: "receive", status: "active", paused: false, speed });
+        }
       }
     };
 
     return handler;
-  }, [upsertTransfer]);
+  }, [upsertTransfer, addLog, calcSpeed]);
 
   const startHeartbeat = useCallback((socket: WebSocket) => {
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
@@ -113,6 +143,7 @@ const Host = () => {
     socket.onopen = () => {
       setReconnecting(false);
       startHeartbeat(socket);
+      addLog("WebSocket connected", "success");
       if (savedHostId) {
         socket.send(JSON.stringify({ type: "reconnect-host", roomId: savedHostId }));
       } else {
@@ -120,13 +151,14 @@ const Host = () => {
       }
     };
 
-    socket.onerror = (err) => console.error("ws error", err);
+    socket.onerror = () => addLog("WebSocket error", "error");
 
     socket.onmessage = async (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === "pong") return;
       if (msg.type === "host-id") {
         setHostId(msg.hostId);
+        addLog(`Room created: ${msg.hostId.slice(0, 8)}...`, "success");
         try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...config, hostId: msg.hostId })); } catch {}
       } else if (msg.error && savedHostId) {
         socket.send(JSON.stringify({ type: "create-room", ...config }));
@@ -134,6 +166,7 @@ const Host = () => {
         const { offer, memberId, username: mu } = msg;
         if (mu) userIdToUsernameRef.current.set(memberId, mu);
         setMembers((p) => p.includes(memberId) ? p : [...p, memberId]);
+        addLog(`Peer connected: ${mu || memberId.slice(0, 8)}`, "success");
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         pc.ondatachannel = (ev) => {
           const dc = ev.channel; dc.binaryType = "arraybuffer";
@@ -152,6 +185,8 @@ const Host = () => {
       } else if (msg.type === "ice-candidate") {
         try { await peerConnectionsRef.current.get(msg.senderId)?.pc?.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
       } else if (msg.type === "disconnected") {
+        const name = userIdToUsernameRef.current.get(msg.memberId) || msg.memberId.slice(0, 8);
+        addLog(`Peer disconnected: ${name}`, "warn");
         peerConnectionsRef.current.get(msg.memberId)?.pc?.close();
         peerConnectionsRef.current.delete(msg.memberId);
         setMembers((p) => p.filter((m) => m !== msg.memberId));
@@ -163,11 +198,12 @@ const Host = () => {
     socket.onclose = () => {
       stopHeartbeat();
       if (intentionalCloseRef.current) return;
+      addLog("Connection lost, reconnecting...", "warn");
       setReconnecting(true);
       const stored = (() => { try { const s = sessionStorage.getItem(STORAGE_KEY); return s ? JSON.parse(s) : null; } catch { return null; } })();
       reconnectTimerRef.current = setTimeout(() => connectSocket(config, stored?.hostId), 2000);
     };
-  }, [makeReceiveHandler, startHeartbeat, stopHeartbeat]);
+  }, [makeReceiveHandler, startHeartbeat, stopHeartbeat, addLog]);
 
   useEffect(() => {
     const stored = (() => { try { const s = sessionStorage.getItem(STORAGE_KEY); return s ? JSON.parse(s) : null; } catch { return null; } })();
@@ -209,6 +245,7 @@ const Host = () => {
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs]);
 
   const closeRoom = () => {
     intentionalCloseRef.current = true;
@@ -227,20 +264,25 @@ const Host = () => {
 
     for (const file of files) {
       const tid = `send-${peerId}-${file.name}-${Date.now()}`;
+      transferStartRef.current.set(tid, Date.now());
       upsertTransfer({ id: tid, peerId, name: file.name, size: file.size, progress: 0, direction: "send", status: "active", paused: false });
+      addLog(`SEND → ${file.name} (${formatBytes(file.size)})`, "info");
       const filePath = (file as any).webkitRelativePath || file.name;
       try {
         await ensureOpen();
         const { promise, control } = sendFileOverChannel(file, dc, filePath, (sent, total) => {
-          upsertTransfer({ id: tid, peerId, name: file.name, size: total, progress: Math.round((sent / total) * 100), direction: "send", status: "active", paused: false });
+          const speed = calcSpeed(tid, sent);
+          upsertTransfer({ id: tid, peerId, name: file.name, size: total, progress: Math.round((sent / total) * 100), direction: "send", status: "active", paused: false, speed });
         });
         sendControlsRef.current.set(tid, control);
         await promise;
         sendControlsRef.current.delete(tid);
         upsertTransfer({ id: tid, peerId, name: file.name, size: file.size, progress: 100, direction: "send", status: "done", paused: false });
+        addLog(`SEND ✓ ${file.name} complete`, "success");
       } catch {
         sendControlsRef.current.delete(tid);
         upsertTransfer({ id: tid, peerId, name: file.name, size: file.size, progress: 0, direction: "send", status: "error", paused: false });
+        addLog(`SEND ✕ ${file.name} failed`, "error");
       }
     }
   };
@@ -248,10 +290,12 @@ const Host = () => {
   const pauseTransfer = (tid: string) => {
     sendControlsRef.current.get(tid)?.pause();
     setTransfers((p) => p.map((t) => t.id === tid ? { ...t, paused: true } : t));
+    addLog(`Transfer paused`, "warn");
   };
   const resumeTransfer = (tid: string) => {
     sendControlsRef.current.get(tid)?.resume();
     setTransfers((p) => p.map((t) => t.id === tid ? { ...t, paused: false } : t));
+    addLog(`Transfer resumed`, "info");
   };
   const cancelTransfer = (t: Transfer) => {
     if (t.direction === "send") {
@@ -262,6 +306,7 @@ const Host = () => {
       recvCancelRef.current.delete(t.id);
     }
     setTransfers((p) => p.map((x) => x.id === t.id ? { ...x, status: "error" } : x));
+    addLog(`Transfer cancelled: ${t.name}`, "error");
   };
 
   const openPicker = (peerId: string, folder = false) => {
@@ -304,61 +349,54 @@ const Host = () => {
   const doneTransfers = transfers.filter((t) => t.status !== "active");
 
   return (
-    <div className="w-full min-h-screen bg-slate-100">
-      {reconnecting && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-white text-center text-sm py-2 font-medium flex items-center justify-center gap-2">
-          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-          </svg>
-          Reconnecting — your room is being restored…
-        </div>
-      )}
+    <div className="w-full min-h-screen bg-cyber-black grid-bg">
+      {/* Reconnecting banner */}
+      <AnimatePresence>
+        {reconnecting && (
+          <motion.div
+            initial={{ y: -40 }} animate={{ y: 0 }} exit={{ y: -40 }}
+            className="fixed top-0 left-0 right-0 z-50 bg-neon-amber/10 border-b border-neon-amber/30 text-neon-amber text-center text-xs py-2 font-mono uppercase tracking-wider"
+          >
+            ▸ RECONNECTING — RESTORING SESSION…
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      <div className="bg-hero-gradient text-white py-5 px-4 sm:px-6" style={{ marginTop: reconnecting ? "2rem" : 0 }}>
+      {/* Header bar */}
+      <div className="bg-cyber-surface border-b border-neon-green/20 py-4 px-4 sm:px-6" style={{ marginTop: reconnecting ? "2rem" : 0 }}>
         <div className="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-white/60 text-xs font-medium uppercase tracking-widest mb-0.5">Host Room</p>
-            <h1 className="text-xl font-bold">Your room is live</h1>
+            <p className="text-neon-green/40 text-[10px] font-mono uppercase tracking-[0.3em] mb-0.5">// HOST MODE</p>
+            <h1 className="text-lg font-display text-neon-green text-glow">ROOM ACTIVE</h1>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-2 bg-white/10 border border-white/20 rounded-xl px-3 py-2">
-              <span className="text-white/60 text-xs">Host ID</span>
-              <span className="font-mono text-sm text-white truncate max-w-[180px]">{hostId || "…"}</span>
-              <button onClick={copyHostId} className="p-1 bg-white/15 hover:bg-white/25 rounded-lg transition-colors">
-                {copied
-                  ? <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-emerald-300" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
-                  : <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-white/70" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>
-                }
+            <div className="flex items-center gap-2 border border-neon-green/20 bg-cyber-black px-3 py-2">
+              <span className="text-neon-green/40 text-[10px] font-mono">ID:</span>
+              <span className="font-mono text-xs text-neon-green truncate max-w-[180px]">{hostId || "…"}</span>
+              <button onClick={copyHostId} className="p-1 border border-neon-green/20 hover:border-neon-green hover:bg-neon-green/10 transition-all">
+                <span className="text-neon-green text-[10px]">{copied ? "✓" : "⧉"}</span>
               </button>
             </div>
-            <button onClick={closeRoom} className="btn-danger text-xs">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
-              Close Room
-            </button>
+            <button onClick={closeRoom} className="btn-danger text-xs">✕ CLOSE</button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 flex flex-col gap-5">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 flex flex-col gap-4">
 
           {/* Members */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="section-title flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-brand-500" viewBox="0 0 20 20" fill="currentColor"><path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" /></svg>
-                Connected Members
+                <span className="text-neon-green">⬡</span> CONNECTED PEERS
               </h2>
-              <span className="badge bg-brand-100 text-brand-700">{members.length}</span>
+              <span className="badge border-neon-green/30 text-neon-green">{members.length}</span>
             </div>
             {members.length === 0 ? (
-              <div className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center">
-                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                </div>
-                <p className="text-slate-500 text-sm font-medium">No members yet</p>
-                <p className="text-slate-400 text-xs mt-1">Share your Host ID to let others join</p>
+              <div className="border border-dashed border-cyber-darkgray p-10 text-center">
+                <p className="text-cyber-gray text-xs font-mono">NO PEERS CONNECTED</p>
+                <p className="text-cyber-darkgray text-[10px] font-mono mt-1">Share your Host ID to let others join</p>
               </div>
             ) : (
               <ul className="space-y-3">
@@ -366,28 +404,27 @@ const Host = () => {
                   <li key={memberId}
                     onDrop={(e) => handleDrop(memberId, e)} onDragOver={(e) => e.preventDefault()}
                     onDragEnter={(e) => handleDragEnter(memberId, e)} onDragLeave={(e) => handleDragLeave(memberId, e)}
-                    className={`rounded-xl border-2 p-4 transition-all duration-150 ${dragOver[memberId] ? "border-brand-400 bg-brand-50 shadow-glow" : "border-slate-100 bg-slate-50 hover:border-slate-200"}`}
+                    className={`border p-4 transition-all duration-150 ${dragOver[memberId] ? "border-neon-green bg-neon-green/5 shadow-neon" : "border-cyber-darkgray/40 hover:border-cyber-darkgray"}`}
                   >
                     <div className="flex items-center justify-between gap-3 flex-wrap">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 bg-brand-100 rounded-full flex items-center justify-center flex-shrink-0">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-brand-600" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" /></svg>
-                        </div>
+                        <div className="w-2 h-2 bg-neon-green rounded-full pulse-dot" />
                         <Toggleable username={userIdToUsernameRef.current.get(memberId) || "Unknown"} userId={memberId} />
-                        <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse-slow" />
                       </div>
                       <div className="flex gap-2">
-                        <button onClick={() => openPicker(memberId, false)} className="btn-primary text-xs px-3 py-1.5">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" /></svg>
-                          File
+                        <button onClick={() => openPicker(memberId, false)} className="btn-primary text-[10px] px-3 py-1.5">
+                          FILE
                         </button>
-                        <button onClick={() => openPicker(memberId, true)} className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-xl transition-all">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" /></svg>
-                          Folder
+                        <button onClick={() => openPicker(memberId, true)} className="btn-secondary text-[10px] px-3 py-1.5">
+                          FOLDER
                         </button>
                       </div>
                     </div>
-                    {dragOver[memberId] && <div className="mt-3 text-center text-xs text-brand-600 font-semibold">↓ Drop to send</div>}
+                    {dragOver[memberId] && (
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 text-center text-xs text-neon-green font-mono animate-glow-pulse">
+                        ↓ DROP TO BEAM ↓
+                      </motion.div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -395,110 +432,129 @@ const Host = () => {
           </div>
 
           {/* Active Transfers */}
-          {activeTransfers.length > 0 && (
-            <div className="card p-5">
-              <h2 className="section-title flex items-center gap-2 mb-4">
-                <span className="w-2 h-2 bg-brand-500 rounded-full animate-pulse-slow" />
-                Active Transfers
-              </h2>
-              <ul className="space-y-3">
-                {activeTransfers.map((t) => (
-                  <li key={t.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={`badge flex-shrink-0 ${t.direction === "send" ? "bg-brand-100 text-brand-700" : "bg-emerald-100 text-emerald-700"}`}>
-                          {t.direction === "send" ? "↑ OUT" : "↓ IN"}
-                        </span>
-                        <span className="text-sm font-medium text-slate-700 truncate">{t.name}</span>
-                        {t.paused && <span className="badge bg-amber-100 text-amber-700 flex-shrink-0">Paused</span>}
+          <AnimatePresence>
+            {activeTransfers.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="card p-5">
+                <h2 className="section-title flex items-center gap-2 mb-4">
+                  <span className="w-2 h-2 bg-neon-green rounded-full animate-pulse" />
+                  ACTIVE TRANSFERS
+                </h2>
+                <ul className="space-y-3">
+                  {activeTransfers.map((t) => (
+                    <li key={t.id} className="bg-cyber-black border border-cyber-darkgray/40 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`badge flex-shrink-0 ${t.direction === "send" ? "border-neon-cyan text-neon-cyan" : "border-neon-green text-neon-green"}`}>
+                            {t.direction === "send" ? "↑ OUT" : "↓ IN"}
+                          </span>
+                          <span className="text-xs font-mono text-cyber-light truncate">{t.name}</span>
+                          {t.paused && <span className="badge border-neon-amber text-neon-amber">PAUSED</span>}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                          {t.speed != null && (
+                            <span className="text-[10px] font-mono text-neon-green">{formatBytes(t.speed)}/s</span>
+                          )}
+                          <span className="text-[10px] font-mono text-cyber-darkgray">{formatBytes(t.size)}</span>
+                          {t.direction === "send" && (
+                            t.paused
+                              ? <button onClick={() => resumeTransfer(t.id)} className="p-1 border border-neon-green/30 hover:border-neon-green text-neon-green transition-all text-xs">▶</button>
+                              : <button onClick={() => pauseTransfer(t.id)} className="p-1 border border-neon-amber/30 hover:border-neon-amber text-neon-amber transition-all text-xs">⏸</button>
+                          )}
+                          <button onClick={() => cancelTransfer(t)} className="p-1 border border-neon-red/30 hover:border-neon-red text-neon-red transition-all text-xs">✕</button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                        <span className="text-xs text-slate-400 mr-1">{formatBytes(t.size)}</span>
-                        {t.direction === "send" && (
-                          t.paused
-                            ? <button onClick={() => resumeTransfer(t.id)} title="Resume" className="p-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-700 transition-colors">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>
-                              </button>
-                            : <button onClick={() => pauseTransfer(t.id)} title="Pause" className="p-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-700 transition-colors">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
-                              </button>
-                        )}
-                        <button onClick={() => cancelTransfer(t)} title="Cancel" className="p-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-600 transition-colors">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
-                        </button>
+                      <div className="progress-bar-track">
+                        <div
+                          className={`progress-bar-fill ${t.paused ? "bg-neon-amber" : "bg-neon-green"}`}
+                          style={{ width: `${t.progress}%` }}
+                        />
                       </div>
-                    </div>
-                    <div className="progress-bar-track">
-                      <div
-                        className={`progress-bar-fill transition-all ${t.paused ? "bg-amber-400" : t.direction === "send" ? "bg-gradient-to-r from-brand-500 to-brand-400" : "bg-gradient-to-r from-emerald-500 to-emerald-400"}`}
-                        style={{ width: `${t.progress}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-xs text-slate-400">{formatBytes(Math.round(t.size * t.progress / 100))} / {formatBytes(t.size)}</span>
-                      <span className="text-xs font-semibold text-slate-600">{t.progress}%</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] font-mono text-cyber-darkgray">{formatBytes(Math.round(t.size * t.progress / 100))} / {formatBytes(t.size)}</span>
+                        <span className="text-[10px] font-mono text-neon-green">{t.progress}%</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Completed Transfers */}
           {doneTransfers.length > 0 && (
             <div className="card p-5">
               <h2 className="section-title flex items-center gap-2 mb-4">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-slate-400" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
-                Completed Transfers
+                ✓ TRANSFER LOG
               </h2>
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-cyber-darkgray/30">
                 {doneTransfers.slice(-10).map((t) => (
                   <li key={t.id} className="flex items-center justify-between py-2.5 gap-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className={`badge flex-shrink-0 ${t.status === "error" ? "bg-red-100 text-red-600" : t.direction === "send" ? "bg-brand-100 text-brand-700" : "bg-emerald-100 text-emerald-700"}`}>
+                      <span className={`badge flex-shrink-0 ${t.status === "error" ? "border-neon-red text-neon-red" : t.direction === "send" ? "border-neon-cyan text-neon-cyan" : "border-neon-green text-neon-green"}`}>
                         {t.status === "error" ? "✕ ERR" : t.direction === "send" ? "↑ SENT" : "↓ RECV"}
                       </span>
-                      <span className="text-sm text-slate-600 truncate">{t.name}</span>
+                      <span className="text-xs font-mono text-cyber-gray truncate">{t.name}</span>
                     </div>
-                    <span className="text-xs text-slate-400 flex-shrink-0">{formatBytes(t.size)}</span>
+                    <span className="text-[10px] font-mono text-cyber-darkgray flex-shrink-0">{formatBytes(t.size)}</span>
                   </li>
                 ))}
               </ul>
             </div>
           )}
+
+          {/* Terminal Log */}
+          <div className="card p-5">
+            <h2 className="section-title flex items-center gap-2 mb-4">
+              &gt;_ ACTIVITY LOG
+            </h2>
+            <div className="bg-cyber-black border border-cyber-darkgray/30 p-3 max-h-48 overflow-y-auto font-mono text-xs">
+              {logs.length === 0 ? (
+                <p className="text-cyber-darkgray">Waiting for activity...</p>
+              ) : logs.map((log, i) => (
+                <div key={i} className="flex gap-2 leading-relaxed">
+                  <span className="text-cyber-darkgray flex-shrink-0">[{log.time}]</span>
+                  <span className={
+                    log.type === "success" ? "text-neon-green" :
+                    log.type === "error" ? "text-neon-red" :
+                    log.type === "warn" ? "text-neon-amber" :
+                    "text-neon-cyan"
+                  }>{log.text}</span>
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          </div>
         </div>
 
         {/* Chat */}
         <div className="card p-5 flex flex-col" style={{ minHeight: "420px" }}>
           <h2 className="section-title flex items-center gap-2 mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-brand-500" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" /></svg>
-            Room Chat
+            ⬡ ROOM CHAT
           </h2>
           <div className="flex-1 overflow-y-auto space-y-2.5 mb-4 -mr-1 pr-1">
             {chatMessages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-slate-400 text-sm">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mb-2 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                No messages yet
+              <div className="flex flex-col items-center justify-center h-full text-cyber-darkgray text-xs font-mono">
+                NO MESSAGES
               </div>
             ) : chatMessages.map((msg, i) => {
               const isHost = msg.senderId === hostId;
               return (
                 <div key={i} className={`flex flex-col ${isHost ? "items-end" : "items-start"}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 ${isHost ? "bg-brand-600 text-white rounded-tr-sm" : "bg-slate-100 text-slate-800 rounded-tl-sm"}`}>
-                    <p className={`text-[10px] font-semibold mb-0.5 ${isHost ? "text-brand-200" : "text-slate-500"}`}>{isHost ? "You" : userIdToUsernameRef.current.get(msg.senderId) || "Unknown"}</p>
-                    <p className="text-sm leading-relaxed">{msg.text}</p>
+                  <div className={`max-w-[85%] px-3 py-2 ${isHost ? "bg-neon-green/10 border border-neon-green/20 text-neon-green" : "bg-cyber-surface border border-cyber-darkgray text-cyber-light"}`}>
+                    <p className={`text-[10px] font-mono font-bold mb-0.5 ${isHost ? "text-neon-green/50" : "text-cyber-darkgray"}`}>
+                      {isHost ? "YOU" : (userIdToUsernameRef.current.get(msg.senderId) || "UNKNOWN")}
+                    </p>
+                    <p className="text-xs font-mono leading-relaxed">{msg.text}</p>
                   </div>
-                  <p className="text-[10px] text-slate-400 mt-0.5 px-1">{new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+                  <p className="text-[10px] text-cyber-darkgray mt-0.5 px-1 font-mono">{new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
                 </div>
               );
             })}
             <div ref={chatEndRef} />
           </div>
-          <div className="flex gap-2 pt-3 border-t border-slate-100">
-            <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="Send a message…" className="input-field flex-1 py-2" />
-            <button onClick={sendMessage} className="btn-primary px-3 py-2">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" /></svg>
-            </button>
+          <div className="flex gap-2 pt-3 border-t border-cyber-darkgray/30">
+            <input type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="> type message..." className="input-field flex-1 py-2 text-xs" />
+            <button onClick={sendMessage} className="btn-primary px-3 py-2 text-xs">▸</button>
           </div>
         </div>
       </div>

@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "dev": "cd frontend && npm run dev"
+  },
+  "dependencies": {
+    "framer-motion": "^12.38.0"
+  }
+}

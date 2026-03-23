@@ -1,41 +1,30 @@
 import { useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 
 const features = [
   {
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-      </svg>
-    ),
-    title: "End-to-End Encrypted",
-    desc: "Files travel directly between browsers — never stored on any server.",
+    icon: "🔒",
+    title: "E2E ENCRYPTED",
+    desc: "DTLS encryption via WebRTC. Files never touch a server. Zero-knowledge architecture.",
+    tag: "SECURITY",
   },
   {
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-      </svg>
-    ),
-    title: "No Size Limits",
-    desc: "Stream any file — even 10 GB+ — without memory overflow.",
+    icon: "⚡",
+    title: "NO SIZE LIMITS",
+    desc: "Stream-based chunked transfer. 10GB, 100GB, or TB-scale — no memory overflow.",
+    tag: "PERFORMANCE",
   },
   {
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-      </svg>
-    ),
-    title: "Folder Transfer",
-    desc: "Upload and share entire folder structures in one action.",
+    icon: "📁",
+    title: "FOLDER TRANSFER",
+    desc: "Upload entire directory structures. Metadata preserved. One-click send.",
+    tag: "CAPABILITY",
   },
   {
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
-    title: "Multi-Peer Rooms",
-    desc: "Connect multiple peers in one room and transfer to any of them.",
+    icon: "👥",
+    title: "MULTI-PEER ROOMS",
+    desc: "Connect multiple peers simultaneously. Transfer to one, many, or all.",
+    tag: "NETWORK",
   },
 ];
 
@@ -45,80 +34,116 @@ const Home = () => {
   return (
     <div className="flex flex-col w-full">
       {/* Hero */}
-      <div className="bg-hero-gradient text-white py-20 px-4 text-center">
-        <div className="max-w-2xl mx-auto animate-fade-in">
-          <div className="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 text-sm font-medium mb-6">
-            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse-slow"></span>
-            WebRTC · No upload · Peer-to-peer
+      <div className="relative bg-cyber-black py-24 px-4 overflow-hidden grid-bg scanlines">
+        <div className="absolute inset-0 bg-gradient-to-b from-neon-green/5 via-transparent to-transparent pointer-events-none" />
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="max-w-3xl mx-auto text-center relative z-10"
+        >
+          <div className="inline-flex items-center gap-2 border border-neon-green/30 px-4 py-1.5 text-xs font-mono font-bold text-neon-green/70 mb-8 tracking-widest">
+            <span className="w-2 h-2 bg-neon-green rounded-full animate-pulse-slow" />
+            WEBRTC • PEER-TO-PEER • ENCRYPTED
           </div>
-          <h1 className="text-4xl sm:text-5xl font-extrabold leading-tight mb-4 tracking-tight">
-            Share files directly,<br />
-            <span className="text-brand-300">no middleman.</span>
+
+          <h1 className="text-4xl sm:text-6xl font-display text-neon-green text-glow leading-tight mb-6 tracking-tight">
+            BEAM FILES<br />
+            <span className="text-cyber-gray">DIRECTLY.</span>
           </h1>
-          <p className="text-white/70 text-lg mb-10 leading-relaxed max-w-lg mx-auto">
-            FileDrop uses WebRTC to stream files straight between browsers — no cloud storage, no size caps, nothing stored.
+
+          <p className="text-cyber-gray font-mono text-sm sm:text-base mb-12 leading-relaxed max-w-xl mx-auto">
+            &gt; No cloud. No limits. No middleman.<br />
+            &gt; Stream files at maximum bandwidth through encrypted WebRTC channels.
           </p>
-          <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button
+
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={() => navigate("/createroom")}
-              className="px-8 py-3.5 bg-white text-brand-700 font-bold rounded-xl hover:bg-brand-50 transition-all shadow-lg hover:shadow-xl text-sm flex items-center justify-center gap-2"
+              className="btn-primary text-sm px-8 py-3.5"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
-                <path stroke="#4f46e5" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 11v3M10.5 12.5h3" />
-              </svg>
-              Create a Room
-            </button>
-            <button
+              ▸ CREATE ROOM
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={() => navigate("/join")}
-              className="px-8 py-3.5 bg-white/10 border border-white/25 text-white font-bold rounded-xl hover:bg-white/20 transition-all text-sm flex items-center justify-center gap-2"
+              className="btn-secondary text-sm px-8 py-3.5"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4.5 w-4.5" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M8 9a3 3 0 100-6 3 3 0 000 6zM8 11a6 6 0 016 6H2a6 6 0 016-6zM16 7a1 1 0 10-2 0v1h-1a1 1 0 100 2h1v1a1 1 0 102 0v-1h1a1 1 0 100-2h-1V7z" />
-              </svg>
-              Join a Room
-            </button>
+              ▸ JOIN ROOM
+            </motion.button>
           </div>
-        </div>
+
+          {/* Terminal-style status line */}
+          <div className="mt-16 font-mono text-xs text-cyber-darkgray border border-cyber-darkgray/40 p-3 text-left max-w-md mx-auto">
+            <p><span className="text-neon-green/50">$</span> beamit --status</p>
+            <p className="text-neon-green/40 mt-1">→ Protocol: WebRTC DataChannel</p>
+            <p className="text-neon-green/40">→ Encryption: DTLS 1.3</p>
+            <p className="text-neon-green/40">→ Max File Size: ∞</p>
+            <p className="text-neon-green/40">→ Server Storage: NONE</p>
+            <p className="text-neon-green mt-1">✓ Ready to transfer<span className="animate-pulse">_</span></p>
+          </div>
+        </motion.div>
       </div>
 
       {/* Features */}
-      <div className="max-w-4xl mx-auto w-full px-4 py-16">
-        <h2 className="text-center text-2xl font-bold text-slate-800 mb-2">Why FileDrop?</h2>
-        <p className="text-center text-slate-500 text-sm mb-10">Built for speed, privacy, and convenience.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-          {features.map((f, i) => (
-            <div key={i} className="card p-6 flex gap-4 hover:shadow-card-hover transition-shadow duration-200">
-              <div className="flex-shrink-0 w-10 h-10 bg-brand-100 text-brand-600 rounded-xl flex items-center justify-center">
-                {f.icon}
-              </div>
-              <div>
-                <h3 className="font-bold text-slate-800 mb-1 text-sm">{f.title}</h3>
-                <p className="text-slate-500 text-sm leading-relaxed">{f.desc}</p>
-              </div>
-            </div>
-          ))}
+      <div className="bg-cyber-surface border-t border-cyber-darkgray/40 py-20 px-4">
+        <div className="max-w-4xl mx-auto">
+          <p className="text-center text-xs font-mono text-neon-green/50 uppercase tracking-[0.3em] mb-2">// CAPABILITIES</p>
+          <h2 className="text-center text-2xl font-display text-neon-green mb-12">SYSTEM SPECS</h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {features.map((f, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 10 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+                viewport={{ once: true }}
+                className="card p-6 hover:border-neon-green/30 transition-all group"
+              >
+                <div className="flex items-start gap-4">
+                  <div className="text-2xl">{f.icon}</div>
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <h3 className="font-mono font-bold text-neon-green text-sm">{f.title}</h3>
+                      <span className="badge border-neon-green/20 text-neon-green/40">{f.tag}</span>
+                    </div>
+                    <p className="text-cyber-gray text-xs leading-relaxed font-mono">{f.desc}</p>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* How it works */}
-      <div className="bg-brand-900/5 border-t border-slate-200 py-14 px-4">
+      <div className="bg-cyber-black border-t border-cyber-darkgray/40 py-20 px-4 grid-bg">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">How it works</h2>
-          <p className="text-slate-500 text-sm mb-10">Three steps to transfer any file.</p>
+          <p className="text-xs font-mono text-neon-green/50 uppercase tracking-[0.3em] mb-2">// PROTOCOL</p>
+          <h2 className="text-2xl font-display text-neon-green mb-12">TRANSFER SEQUENCE</h2>
+
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             {[
-              { step: "1", title: "Create a room", desc: "Pick a name, set it public or private." },
-              { step: "2", title: "Share the ID", desc: "Give your Host ID to the other person." },
-              { step: "3", title: "Drop and send", desc: "Drag files onto any peer — they arrive instantly." },
-            ].map((s) => (
-              <div key={s.step} className="flex-1 card p-6 text-center">
-                <div className="w-10 h-10 bg-brand-600 text-white font-bold text-lg rounded-full flex items-center justify-center mx-auto mb-3">
-                  {s.step}
-                </div>
-                <h3 className="font-bold text-slate-800 text-sm mb-1">{s.title}</h3>
-                <p className="text-slate-500 text-xs leading-relaxed">{s.desc}</p>
-              </div>
+              { step: "01", title: "INIT ROOM", desc: "Create a session. Get your unique room ID." },
+              { step: "02", title: "SHARE ID", desc: "Send the room ID to your peer over any channel." },
+              { step: "03", title: "BEAM FILES", desc: "Drop files. Direct P2P transfer begins instantly." },
+            ].map((s, i) => (
+              <motion.div
+                key={s.step}
+                initial={{ opacity: 0, y: 10 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.15 }}
+                viewport={{ once: true }}
+                className="flex-1 card p-6 text-center"
+              >
+                <div className="text-3xl font-display text-neon-green/20 mb-3">{s.step}</div>
+                <h3 className="font-mono font-bold text-neon-green text-sm mb-2">{s.title}</h3>
+                <p className="text-cyber-gray text-xs font-mono leading-relaxed">{s.desc}</p>
+              </motion.div>
             ))}
           </div>
         </div>

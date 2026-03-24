@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import Toggleable from "./Toggleable";
 import { getWsUrl } from "../utils/wsUrl";
-import { sendFileOverChannel, formatBytes, FileMeta, TransferControl } from "../utils/fileTransfer";
+import { sendFileOverChannel, formatBytes, FileMeta, TransferControl, getFilesFromDataTransfer } from "../utils/fileTransfer";
 
 interface ChatMessage { senderId: string; text: string; timestamp: number; }
 interface Transfer {
@@ -11,11 +11,14 @@ interface Transfer {
   progress: number; direction: "send" | "receive"; status: "active" | "done" | "error"; paused: boolean;
   speed?: number; startTime?: number;
 }
-interface PeerState { pc: RTCPeerConnection; dataChannel: RTCDataChannel; }
+interface PeerState { pc: RTCPeerConnection; dataChannel: RTCDataChannel | null; }
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
 ];
 
 const STORAGE_KEY = "filedrop-host-session";
@@ -24,6 +27,7 @@ const HEARTBEAT_MS = 15_000;
 const Host = () => {
   const socketRef = useRef<WebSocket | null>(null);
   const peerConnectionsRef = useRef<Map<string, PeerState>>(new Map());
+  const pendingIceRef = useRef<Map<string, RTCIceCandidate[]>>(new Map());
   const userIdToUsernameRef = useRef<Map<string, string>>(new Map());
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,8 +45,7 @@ const Host = () => {
   const [copied, setCopied] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [logs, setLogs] = useState<{ time: string; text: string; type: "info" | "success" | "error" | "warn" }[]>([]);
-  const dragCounterRef = useRef<{ [id: string]: number }>({});
-  const [dragOver, setDragOver] = useState<{ [id: string]: boolean }>({});
+  const [globalDrag, setGlobalDrag] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -79,45 +82,91 @@ const Host = () => {
     let receivedBytes = 0;
     let tid = "";
     let cancelled = false;
+    let fileStream: any = null;
+    let fileHandle: any = null;
+    let writeQueue = Promise.resolve();
 
     const cancelFn = () => {
       cancelled = true;
       if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
+      if (fileStream) { fileStream.close().catch(()=>{}); }
       meta = null; buffers = [];
     };
 
-    const handler = (ev: MessageEvent) => {
+    const handler = async (ev: MessageEvent) => {
       if (typeof ev.data === "string") {
         const msg = JSON.parse(ev.data);
         if (msg.type === "file-meta") {
           meta = msg as FileMeta; buffers = []; receivedBytes = 0; cancelled = false;
+          fileStream = null; fileHandle = null;
           tid = `recv-${peerId}-${Date.now()}`;
           recvCancelRef.current.set(tid, cancelFn);
           transferStartRef.current.set(tid, Date.now());
           upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: 0, direction: "receive", status: "active", paused: false });
           addLog(`RECV ← ${meta.name} (${formatBytes(meta.size)})`, "info");
+          
+          try {
+            const root = await navigator.storage.getDirectory();
+            fileHandle = await root.getFileHandle(tid, { create: true });
+            fileStream = await fileHandle.createWritable();
+          } catch (e) {
+            // Safari/Firefox/Private browser mode might block OPFS.
+          }
         } else if (msg.type === "EOF") {
           if (!cancelled && meta) {
-            const blob = new Blob(buffers);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a"); a.href = url; a.download = meta.name;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: 100, direction: "receive", status: "done", paused: false });
-            addLog(`RECV ✓ ${meta.name} complete`, "success");
+            const currentMeta = meta;
+            const currentBuffers = buffers;
+            const currentTid = tid;
+            const currentStream = fileStream;
+            const currentHandle = fileHandle;
+
+            writeQueue = writeQueue.then(async () => {
+              let url: string;
+              if (currentStream) {
+                await currentStream.close();
+                const file = await currentHandle.getFile();
+                url = URL.createObjectURL(file);
+              } else {
+                const blob = new Blob(currentBuffers);
+                url = URL.createObjectURL(blob);
+              }
+              const a = document.createElement("a"); a.href = url; a.download = currentMeta.name;
+              document.body.appendChild(a); a.click(); document.body.removeChild(a);
+              setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+              if (currentStream) {
+                const root = await navigator.storage.getDirectory();
+                root.removeEntry(currentTid).catch(()=>{});
+              }
+              upsertTransfer({ id: currentTid, peerId, name: currentMeta.name, size: currentMeta.size, progress: 100, direction: "receive", status: "done", paused: false });
+              addLog(`RECV ✓ ${currentMeta.name} complete`, "success");
+            }).catch(e => console.error("Write error:", e));
           }
           meta = null; buffers = []; recvCancelRef.current.delete(tid);
+          fileStream = null; fileHandle = null;
         } else if (msg.type === "transfer-cancelled") {
           cancelled = true;
           if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
           addLog(`RECV ✕ transfer cancelled`, "error");
+          if (fileStream) { fileStream.close().catch(()=>{}); }
           meta = null; buffers = [];
         }
       } else if (ev.data instanceof ArrayBuffer && !cancelled) {
-        buffers.push(ev.data); receivedBytes += ev.data.byteLength;
+        if (fileStream) {
+          writeQueue = writeQueue.then(() => fileStream.write(ev.data));
+        } else {
+          buffers.push(ev.data);
+        }
+        receivedBytes += ev.data.byteLength;
+        
+        let lastProgressTime = 0;
         if (meta) {
-          const speed = calcSpeed(tid, receivedBytes);
-          upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: Math.round((receivedBytes / meta.size) * 100), direction: "receive", status: "active", paused: false, speed });
+          const now = Date.now();
+          if (now - lastProgressTime > 50 || receivedBytes === meta.size) {
+            const speed = calcSpeed(tid, receivedBytes);
+            upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: Math.round((receivedBytes / meta.size) * 100), direction: "receive", status: "active", paused: false, speed });
+            lastProgressTime = now;
+          }
         }
       }
     };
@@ -168,6 +217,7 @@ const Host = () => {
         setMembers((p) => p.includes(memberId) ? p : [...p, memberId]);
         addLog(`Peer connected: ${mu || memberId.slice(0, 8)}`, "success");
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        peerConnectionsRef.current.set(memberId, { pc, dataChannel: null });
         pc.ondatachannel = (ev) => {
           const dc = ev.channel; dc.binaryType = "arraybuffer";
           dc.onmessage = makeReceiveHandler(memberId);
@@ -181,9 +231,21 @@ const Host = () => {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           socket.send(JSON.stringify({ type: "create-answer", answer, targetId: memberId }));
+
+          const pending = pendingIceRef.current.get(memberId) || [];
+          for (const c of pending) { try { await pc.addIceCandidate(c); } catch {} }
+          pendingIceRef.current.delete(memberId);
         } catch (err) { console.error("answer err", err); }
       } else if (msg.type === "ice-candidate") {
-        try { await peerConnectionsRef.current.get(msg.senderId)?.pc?.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+        const conn = peerConnectionsRef.current.get(msg.senderId);
+        if (conn && conn.pc) {
+          if (!conn.pc.remoteDescription) {
+            if (!pendingIceRef.current.has(msg.senderId)) pendingIceRef.current.set(msg.senderId, []);
+            pendingIceRef.current.get(msg.senderId)!.push(new RTCIceCandidate(msg.candidate));
+          } else {
+            try { await conn.pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+          }
+        }
       } else if (msg.type === "disconnected") {
         const name = userIdToUsernameRef.current.get(msg.memberId) || msg.memberId.slice(0, 8);
         addLog(`Peer disconnected: ${name}`, "warn");
@@ -231,11 +293,17 @@ const Host = () => {
     };
 
     document.addEventListener("visibilitychange", handleVisibility);
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.types.includes("Files")) setGlobalDrag(true);
+    };
+    window.addEventListener("dragenter", handleWindowDragEnter);
     connectSocket(config, savedHostId);
 
     return () => {
       intentionalCloseRef.current = true;
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("dragenter", handleWindowDragEnter);
       stopHeartbeat();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       peerConnectionsRef.current.forEach(({ pc }) => pc.close());
@@ -249,14 +317,20 @@ const Host = () => {
 
   const closeRoom = () => {
     intentionalCloseRef.current = true;
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: "close-room" }));
+    }
     try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
     navigate("/");
   };
 
   const sendFiles = async (peerId: string, files: File[]) => {
     const conn = peerConnectionsRef.current.get(peerId);
-    if (!conn) return;
-    const { dataChannel: dc } = conn;
+    if (!conn || !conn.dataChannel) {
+      addLog(`Cannot send: Connection not ready for ${peerId}`, "error");
+      return;
+    }
+    const dc = conn.dataChannel;
 
     const ensureOpen = () => dc.readyState === "open"
       ? Promise.resolve()
@@ -311,31 +385,33 @@ const Host = () => {
 
   const openPicker = (peerId: string, folder = false) => {
     const input = document.createElement("input");
-    input.type = "file"; input.multiple = true;
-    if (folder) (input as any).webkitdirectory = true;
+    input.type = "file"; 
+    input.setAttribute("multiple", "multiple");
+    if (folder) {
+      input.setAttribute("webkitdirectory", "true");
+      input.setAttribute("directory", "true");
+    }
     input.onchange = () => { if (input.files) sendFiles(peerId, Array.from(input.files)); };
     input.click();
   };
 
-  const handleDrop = (peerId: string, e: React.DragEvent) => {
-    e.preventDefault(); dragCounterRef.current[peerId] = 0;
-    setDragOver((p) => ({ ...p, [peerId]: false }));
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length) sendFiles(peerId, files);
-  };
-  const handleDragEnter = (peerId: string, e: React.DragEvent) => {
+  const handleGlobalDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    dragCounterRef.current[peerId] = (dragCounterRef.current[peerId] || 0) + 1;
-    setDragOver((p) => ({ ...p, [peerId]: true }));
-  };
-  const handleDragLeave = (peerId: string, e: React.DragEvent) => {
-    e.preventDefault();
-    dragCounterRef.current[peerId] = (dragCounterRef.current[peerId] || 1) - 1;
-    if (dragCounterRef.current[peerId] === 0) setDragOver((p) => ({ ...p, [peerId]: false }));
+    setGlobalDrag(false);
+    if (members.length === 0) return;
+    const items = e.dataTransfer.items;
+    let files: File[] = [];
+    if (items && items.length > 0) files = await getFilesFromDataTransfer(items);
+    else files = Array.from(e.dataTransfer.files);
+    
+    if (files.length > 0) {
+      members.forEach((peerId) => sendFiles(peerId, files));
+    }
   };
 
   const copyHostId = () => {
-    navigator.clipboard.writeText(hostId).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    const url = `${window.location.origin}/join?id=${hostId}`;
+    navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
 
   const sendMessage = () => {
@@ -350,6 +426,24 @@ const Host = () => {
 
   return (
     <div className="w-full min-h-screen bg-cyber-black grid-bg">
+      <AnimatePresence>
+        {globalDrag && members.length > 0 && (
+          <motion.div 
+            onDragLeave={(e) => { e.preventDefault(); setGlobalDrag(false); }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleGlobalDrop}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-cyber-black/90 backdrop-blur-sm border-4 border-dashed border-neon-green flex flex-col items-center justify-center pointer-events-auto"
+          >
+            <div className="w-32 h-32 mb-6 border-2 border-neon-green flex items-center justify-center rounded-full animate-pulse-slow box-glow pointer-events-none">
+              <span className="text-neon-green text-5xl">↓</span>
+            </div>
+            <h2 className="text-4xl font-display text-neon-green text-glow mb-2 pointer-events-none">RELEASE TO BEAM</h2>
+            <p className="text-neon-green/60 font-mono tracking-widest uppercase pointer-events-none">Sending to {members.length} connected peer{members.length !== 1 ? "s" : ""}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Reconnecting banner */}
       <AnimatePresence>
         {reconnecting && (
@@ -368,10 +462,14 @@ const Host = () => {
           <div>
             <p className="text-neon-green/40 text-[10px] font-mono uppercase tracking-[0.3em] mb-0.5">// HOST MODE</p>
             <h1 className="text-lg font-display text-neon-green text-glow">ROOM ACTIVE</h1>
+            <p className="text-[10px] font-mono text-neon-green/60 mt-1 flex items-center gap-1">
+              <span className="w-1 h-1 bg-neon-green rounded-full pulse-dot"></span>
+              END-TO-END ENCRYPTED (DTLS)
+            </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 border border-neon-green/20 bg-cyber-black px-3 py-2">
-              <span className="text-neon-green/40 text-[10px] font-mono">ID:</span>
+              <span className="text-neon-green/40 text-[10px] font-mono">LINK:</span>
               <span className="font-mono text-xs text-neon-green truncate max-w-[180px]">{hostId || "…"}</span>
               <button onClick={copyHostId} className="p-1 border border-neon-green/20 hover:border-neon-green hover:bg-neon-green/10 transition-all">
                 <span className="text-neon-green text-[10px]">{copied ? "✓" : "⧉"}</span>
@@ -402,9 +500,7 @@ const Host = () => {
               <ul className="space-y-3">
                 {members.map((memberId) => (
                   <li key={memberId}
-                    onDrop={(e) => handleDrop(memberId, e)} onDragOver={(e) => e.preventDefault()}
-                    onDragEnter={(e) => handleDragEnter(memberId, e)} onDragLeave={(e) => handleDragLeave(memberId, e)}
-                    className={`border p-4 transition-all duration-150 ${dragOver[memberId] ? "border-neon-green bg-neon-green/5 shadow-neon" : "border-cyber-darkgray/40 hover:border-cyber-darkgray"}`}
+                    className={`border p-4 transition-all duration-150 border-cyber-darkgray/40 hover:border-cyber-darkgray`}
                   >
                     <div className="flex items-center justify-between gap-3 flex-wrap">
                       <div className="flex items-center gap-3">
@@ -420,11 +516,6 @@ const Host = () => {
                         </button>
                       </div>
                     </div>
-                    {dragOver[memberId] && (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 text-center text-xs text-neon-green font-mono animate-glow-pulse">
-                        ↓ DROP TO BEAM ↓
-                      </motion.div>
-                    )}
                   </li>
                 ))}
               </ul>

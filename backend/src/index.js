@@ -242,6 +242,9 @@ wss.on("connection", (ws) => {
       case "ice-candidate":
         exchangeCandidate(ws, message);
         break;
+      case "close-room":
+        closeRoomNow(webSocketToUserId.get(ws));
+        break;
       case "public-rooms":
         ws.send(JSON.stringify({ type: "public-rooms", rooms: Object.fromEntries(rooms) }));
         break;
@@ -252,6 +255,20 @@ wss.on("connection", (ws) => {
         ws.send(JSON.stringify({ error: "invalid message type" }));
     }
   });
+});
+
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    console.error(`[ERROR] HTTP Server: Port ${PORT} is already in use.`);
+    process.exit(1);
+  }
+});
+
+wss.on("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    console.error(`[ERROR] WebSocket Server: Port ${PORT} is already in use.`);
+    process.exit(1);
+  }
 });
 
 server.listen(PORT, "0.0.0.0", () => {

@@ -8,8 +8,10 @@ const Footer = () => {
             <span className="text-cyber-darkgray text-xs font-mono">// P2P TRANSFER PROTOCOL</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-cyber-darkgray text-xs font-mono">
-              DEVELOPED BY <span className="text-neon-green/70">SRISAI SHIVAKOTI</span>
+            <span className="text-cyber-darkgray text-xs font-mono flex items-center gap-2">
+              DEVELOPED BY
+              <img src="/profile.png" alt="Profile" className="w-6 h-6 rounded-full object-cover object-center border border-neon-green/50" />
+              <span className="text-neon-green/70">SRISAI SHIVAKOTI</span>
             </span>
           </div>
         </div>

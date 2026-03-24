@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import Home from "./components/Home";
@@ -7,6 +8,16 @@ import CreateRoom from "./components/CreateRoom";
 import "./index.css";
 
 function App() {
+  useEffect(() => {
+    const preventDefault = (e: Event) => e.preventDefault();
+    window.addEventListener("dragover", preventDefault, false);
+    window.addEventListener("drop", preventDefault, false);
+    return () => {
+      window.removeEventListener("dragover", preventDefault, false);
+      window.removeEventListener("drop", preventDefault, false);
+    };
+  }, []);
+
   return (
     <Routes>
       <Route path="/" element={<Layout />}>

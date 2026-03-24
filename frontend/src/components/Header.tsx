@@ -1,9 +1,32 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 const Header = () => {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isLightMode, setIsLightMode] = useState(false);
+
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "light") {
+      setIsLightMode(true);
+      document.documentElement.classList.add("theme-light");
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    setIsLightMode((prev) => {
+      const light = !prev;
+      if (light) {
+        document.documentElement.classList.add("theme-light");
+        localStorage.setItem("theme", "light");
+      } else {
+        document.documentElement.classList.remove("theme-light");
+        localStorage.setItem("theme", "dark");
+      }
+      return light;
+    });
+  };
 
   const navLinks = [
     { to: "/", label: "[HOME]" },
@@ -36,6 +59,12 @@ const Header = () => {
                 {label}
               </Link>
             ))}
+            <button
+              onClick={toggleTheme}
+              className="ml-4 px-3 py-1.5 border border-neon-green/40 text-neon-green hover:bg-neon-green/10 transition-colors flex items-center justify-center rounded-none text-xs font-mono font-bold tracking-wider"
+            >
+              {isLightMode ? "[DARK MODE]" : "[LIGHT MODE]"}
+            </button>
           </nav>
 
           <button
@@ -67,6 +96,12 @@ const Header = () => {
                 {label}
               </Link>
             ))}
+            <button
+              onClick={() => { toggleTheme(); setMenuOpen(false); }}
+              className="px-4 py-2.5 text-xs font-mono font-bold tracking-wider text-neon-green hover:text-cyber-gray text-left"
+            >
+              {isLightMode ? "[SWITCH TO DARK MODE]" : "[SWITCH TO LIGHT MODE]"}
+            </button>
           </div>
         )}
       </div>

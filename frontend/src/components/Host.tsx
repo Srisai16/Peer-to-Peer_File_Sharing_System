@@ -84,7 +84,17 @@ const Host = () => {
     let cancelled = false;
     let fileStream: any = null;
     let fileHandle: any = null;
-    let writeQueue = Promise.resolve();
+    let isWriting = false;
+
+    const processQueue = async () => {
+      if (isWriting || !fileStream || buffers.length === 0) return;
+      isWriting = true;
+      while (buffers.length > 0 && !cancelled) {
+        const chunk = buffers.shift();
+        if (chunk && fileStream) await fileStream.write(chunk).catch(()=>{});
+      }
+      isWriting = false;
+    };
 
     const cancelFn = () => {
       cancelled = true;
@@ -120,16 +130,20 @@ const Host = () => {
             const currentStream = fileStream;
             const currentHandle = fileHandle;
 
-            writeQueue = writeQueue.then(async () => {
+            const finish = async () => {
+              while (isWriting || (currentStream && buffers.length > 0)) {
+                await new Promise(r => setTimeout(r, 20));
+              }
+
               let url: string;
               if (currentStream) {
-                await currentStream.close();
+                await currentStream.close().catch(()=>{});
                 const file = await currentHandle.getFile();
                 url = URL.createObjectURL(file);
               } else {
-                const blob = new Blob(currentBuffers);
-                url = URL.createObjectURL(blob);
+                url = URL.createObjectURL(new Blob(currentBuffers));
               }
+
               const a = document.createElement("a"); a.href = url; a.download = currentMeta.name;
               document.body.appendChild(a); a.click(); document.body.removeChild(a);
               setTimeout(() => URL.revokeObjectURL(url), 10000);
@@ -140,10 +154,10 @@ const Host = () => {
               }
               upsertTransfer({ id: currentTid, peerId, name: currentMeta.name, size: currentMeta.size, progress: 100, direction: "receive", status: "done", paused: false });
               addLog(`RECV ✓ ${currentMeta.name} complete`, "success");
-            }).catch(e => console.error("Write error:", e));
+            };
+            finish().catch(console.error);
           }
-          meta = null; buffers = []; recvCancelRef.current.delete(tid);
-          fileStream = null; fileHandle = null;
+          recvCancelRef.current.delete(tid);
         } else if (msg.type === "transfer-cancelled") {
           cancelled = true;
           if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
@@ -152,10 +166,9 @@ const Host = () => {
           meta = null; buffers = [];
         }
       } else if (ev.data instanceof ArrayBuffer && !cancelled) {
+        buffers.push(ev.data);
         if (fileStream) {
-          writeQueue = writeQueue.then(() => fileStream.write(ev.data));
-        } else {
-          buffers.push(ev.data);
+          processQueue();
         }
         receivedBytes += ev.data.byteLength;
         

@@ -58,7 +58,7 @@ export const getFilesFromDataTransfer = async (itemList: DataTransferItemList): 
 };
 
 
-const BUFFER_THRESHOLD = 4 * 1024 * 1024; // 4MB safe buffer limit for memory constrained OSs
+const BUFFER_THRESHOLD = 8 * 1024 * 1024; // 8MB Maximum Saturation Buffer
 
 export const sendFileOverChannel = (
   file: File,
@@ -92,7 +92,7 @@ export const sendFileOverChannel = (
     },
   };
 
-  dataChannel.bufferedAmountLowThreshold = 1 * 1024 * 1024; // 1MB low watermark to trigger refilles cleanly
+  dataChannel.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2MB Low Watermark
 
   const promise = (async () => {
     const meta: FileMeta = {
@@ -105,7 +105,7 @@ export const sendFileOverChannel = (
 
     const reader = file.stream().getReader();
     let offset = 0;
-    const CHUNK_SIZE = 64 * 1024; // 64KB strict cross-browser maximum SCTP boundary
+    const CHUNK_SIZE = 128 * 1024; // 128KB peak throughput without breaking SCTP
     let lastProgressTime = 0;
 
     while (true) {

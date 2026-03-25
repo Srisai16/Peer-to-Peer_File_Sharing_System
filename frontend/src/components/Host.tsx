@@ -247,11 +247,7 @@ const Host = () => {
           }
         }
       } else if (msg.type === "disconnected") {
-        const name = userIdToUsernameRef.current.get(msg.memberId) || msg.memberId.slice(0, 8);
-        addLog(`Peer disconnected: ${name}`, "warn");
-        peerConnectionsRef.current.get(msg.memberId)?.pc?.close();
-        peerConnectionsRef.current.delete(msg.memberId);
-        setMembers((p) => p.filter((m) => m !== msg.memberId));
+        addLog(`Signaling link temporarily lost for peer ${msg.memberId}`, "info");
       } else if (msg.type === "chat-message") {
         setChatMessages((p) => [...p, { senderId: msg.senderId, text: msg.text, timestamp: msg.timestamp }]);
       }

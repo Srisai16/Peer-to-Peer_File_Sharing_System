@@ -35,7 +35,13 @@ const server = http.createServer((req, res) => {
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end("Not found"); return; }
-    res.writeHead(200, { "Content-Type": contentType });
+    const headers = { "Content-Type": contentType };
+    if (req.url === "/" || req.url === "/index.html" || req.url === "") {
+      headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+      headers["Pragma"] = "no-cache";
+      headers["Expires"] = "0";
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 });

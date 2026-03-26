@@ -123,7 +123,7 @@ const Host = () => {
         } else if (msg.type === "EOF") {
           if (!state.cancelled && state.meta) {
             const finish = async () => {
-              while (state.isWriting || (state.fileStream && state.buffers.length > 0)) {
+              while (state.receivedBytes < state.meta.size || state.isWriting || (state.fileStream && state.buffers.length > 0)) {
                 await new Promise(r => setTimeout(r, 20));
               }
 
@@ -254,7 +254,10 @@ const Host = () => {
           }
         }
       } else if (msg.type === "disconnected") {
-        addLog(`Signaling link temporarily lost for peer ${msg.memberId}`, "info");
+        setMembers(p => p.filter(id => id !== msg.memberId));
+        peerConnectionsRef.current.get(msg.memberId)?.pc.close();
+        peerConnectionsRef.current.delete(msg.memberId);
+        addLog(`Peer disconnected: ${userIdToUsernameRef.current.get(msg.memberId) || msg.memberId.slice(0, 8)}`, "info");
       } else if (msg.type === "chat-message") {
         setChatMessages((p) => [...p, { senderId: msg.senderId, text: msg.text, timestamp: msg.timestamp }]);
       }
@@ -336,11 +339,15 @@ const Host = () => {
     const dcs = conn.dataChannels;
 
     const ensureOpen = async () => {
-      for (const dc of dcs) {
-        if (dc.readyState !== "open") {
-          await new Promise<void>((r) => { dc.onopen = () => r(); });
-        }
-      }
+      const waitPromises = dcs.map((dc) => {
+        if (dc.readyState === "open") return Promise.resolve();
+        return new Promise<void>((r) => {
+          const t = setTimeout(r, 3000);
+          dc.onopen = () => { clearTimeout(t); r(); };
+        });
+      });
+      await Promise.all(waitPromises);
+      if (dcs.every(dc => dc.readyState !== "open")) throw new Error("No channels established over network.");
     };
 
     for (const file of files) {

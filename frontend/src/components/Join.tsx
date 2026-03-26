@@ -126,7 +126,7 @@ const Join = () => {
         } else if (msg.type === "EOF") {
           if (!state.cancelled && state.meta) {
             const finish = async () => {
-              while (state.isWriting || (state.fileStream && state.buffers.length > 0)) {
+              while (state.receivedBytes < state.meta.size || state.isWriting || (state.fileStream && state.buffers.length > 0)) {
                 await new Promise(r => setTimeout(r, 20));
               }
 
@@ -391,11 +391,15 @@ const Join = () => {
     const dcs = conn.dataChannels;
 
     const ensureOpen = async () => {
-      for (const dc of dcs) {
-        if (dc.readyState !== "open") {
-          await new Promise<void>((r) => { dc.onopen = () => r(); });
-        }
-      }
+      const waitPromises = dcs.map((dc) => {
+        if (dc.readyState === "open") return Promise.resolve();
+        return new Promise<void>((r) => {
+          const t = setTimeout(r, 3000);
+          dc.onopen = () => { clearTimeout(t); r(); };
+        });
+      });
+      await Promise.all(waitPromises);
+      if (dcs.every(dc => dc.readyState !== "open")) throw new Error("No channels established over network.");
     };
 
     for (const file of files) {

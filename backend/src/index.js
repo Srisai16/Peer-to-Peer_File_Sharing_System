@@ -211,6 +211,8 @@ const sendChatMessage = (ws, text) => {
 };
 
 wss.on("connection", (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   addUser(ws);
 
   ws.on("close", () => removeUser(ws));
@@ -276,6 +278,19 @@ wss.on("error", (e) => {
     process.exit(1);
   }
 });
+
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      removeUser(ws);
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on('close', () => clearInterval(pingInterval));
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`server listening on port ${PORT}`);

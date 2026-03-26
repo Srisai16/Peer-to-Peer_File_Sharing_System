@@ -301,6 +301,18 @@ const Join = () => {
         setRoomMembers((p) => p.filter((id) => id !== msg.memberId));
         peerConnectionRef.current.get(msg.memberId)?.pc?.close();
         peerConnectionRef.current.delete(msg.memberId);
+        
+        const state = receiverStateRef.current.get(msg.memberId);
+        if (state && !state.cancelled) {
+          state.cancelled = true;
+          if (state.tid) {
+             upsertTransfer({ id: state.tid, peerId: msg.memberId, name: state.meta?.name ?? "", size: state.meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
+          }
+          if (state.fileStream) { state.fileStream.close().catch(()=>{}); }
+        }
+        receiverStateRef.current.delete(msg.memberId);
+        setTransfers((p) => p.map((t) => t.peerId === msg.memberId && t.status === "active" ? { ...t, status: "error" } : t));
+        
       } else if (msg.type === "chat-message") {
         setChatMessages((p) => [...p, { senderId: msg.senderId, text: msg.text, timestamp: msg.timestamp }]);
       }

@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import Toggleable from "./Toggleable";
 import { getWsUrl } from "../utils/wsUrl";
-import { sendFileOverChannel, formatBytes, FileMeta, TransferControl, getFilesFromDataTransfer } from "../utils/fileTransfer";
+import { sendFileOverChannels, formatBytes, FileMeta, TransferControl, getFilesFromDataTransfer } from "../utils/fileTransfer";
 
 interface ChatMessage { senderId: string; text: string; timestamp: number; }
 interface Transfer {
@@ -11,7 +11,7 @@ interface Transfer {
   progress: number; direction: "send" | "receive"; status: "active" | "done" | "error"; paused: boolean;
   speed?: number; startTime?: number;
 }
-interface PeerState { pc: RTCPeerConnection; dataChannel: RTCDataChannel | null; }
+interface PeerState { pc: RTCPeerConnection; dataChannels: RTCDataChannel[]; }
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -36,6 +36,7 @@ const Host = () => {
   const recvCancelRef = useRef<Map<string, () => void>>(new Map());
   const transferStartRef = useRef<Map<string, number>>(new Map());
   const lastBytesRef = useRef<Map<string, { bytes: number; time: number }>>(new Map());
+  const receiverStateRef = useRef<Map<string, any>>(new Map());
 
   const [hostId, setHostId] = useState("");
   const [members, setMembers] = useState<string[]>([]);
@@ -77,107 +78,99 @@ const Host = () => {
   }, []);
 
   const makeReceiveHandler = useCallback((peerId: string) => {
-    let meta: FileMeta | null = null;
-    let buffers: ArrayBuffer[] = [];
-    let receivedBytes = 0;
-    let tid = "";
-    let cancelled = false;
-    let fileStream: any = null;
-    let fileHandle: any = null;
-    let isWriting = false;
-
-    const processQueue = async () => {
-      if (isWriting || !fileStream || buffers.length === 0) return;
-      isWriting = true;
-      while (buffers.length > 0 && !cancelled) {
-        const chunk = buffers.shift();
-        if (chunk && fileStream) await fileStream.write(chunk).catch(()=>{});
+    const processQueue = async (state: any) => {
+      if (state.isWriting || !state.fileStream || state.buffers.length === 0) return;
+      state.isWriting = true;
+      while (state.buffers.length > 0 && !state.cancelled) {
+        const item = state.buffers.shift();
+        if (item && state.fileStream) {
+          await state.fileStream.write({ type: "write", position: item.offset, data: item.chunk }).catch(console.error);
+        }
       }
-      isWriting = false;
+      state.isWriting = false;
     };
 
-    const cancelFn = () => {
-      cancelled = true;
-      if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
-      if (fileStream) { fileStream.close().catch(()=>{}); }
-      meta = null; buffers = [];
+    const cancelFn = (state: any) => {
+      state.cancelled = true;
+      if (state.tid) upsertTransfer({ id: state.tid, peerId, name: state.meta?.name ?? "", size: state.meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
+      if (state.fileStream) { state.fileStream.close().catch(()=>{}); }
+      state.meta = null; state.buffers = [];
     };
 
     const handler = async (ev: MessageEvent) => {
+      let state = receiverStateRef.current.get(peerId);
+      if (!state) {
+        state = { meta: null, buffers: [], receivedBytes: 0, tid: "", cancelled: false, fileStream: null, fileHandle: null, isWriting: false };
+        receiverStateRef.current.set(peerId, state);
+      }
+
       if (typeof ev.data === "string") {
         const msg = JSON.parse(ev.data);
         if (msg.type === "file-meta") {
-          meta = msg as FileMeta; buffers = []; receivedBytes = 0; cancelled = false;
-          fileStream = null; fileHandle = null;
-          tid = `recv-${peerId}-${Date.now()}`;
-          recvCancelRef.current.set(tid, cancelFn);
-          transferStartRef.current.set(tid, Date.now());
-          upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: 0, direction: "receive", status: "active", paused: false });
-          addLog(`RECV ← ${meta.name} (${formatBytes(meta.size)})`, "info");
+          state.meta = msg as FileMeta; state.buffers = []; state.receivedBytes = 0; state.cancelled = false;
+          state.fileStream = null; state.fileHandle = null;
+          state.tid = `recv-${peerId}-${Date.now()}`;
+          recvCancelRef.current.set(state.tid, () => cancelFn(state));
+          transferStartRef.current.set(state.tid, Date.now());
+          upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 0, direction: "receive", status: "active", paused: false });
+          addLog(`RECV ← ${state.meta.name} (${formatBytes(state.meta.size)})`, "info");
           
           try {
             const root = await navigator.storage.getDirectory();
-            fileHandle = await root.getFileHandle(tid, { create: true });
-            fileStream = await fileHandle.createWritable();
-          } catch (e) {
-            // Safari/Firefox/Private browser mode might block OPFS.
-          }
+            state.fileHandle = await root.getFileHandle(state.tid, { create: true });
+            state.fileStream = await state.fileHandle.createWritable();
+          } catch (e) {}
         } else if (msg.type === "EOF") {
-          if (!cancelled && meta) {
-            const currentMeta = meta;
-            const currentBuffers = buffers;
-            const currentTid = tid;
-            const currentStream = fileStream;
-            const currentHandle = fileHandle;
-
+          if (!state.cancelled && state.meta) {
             const finish = async () => {
-              while (isWriting || (currentStream && buffers.length > 0)) {
+              while (state.isWriting || (state.fileStream && state.buffers.length > 0)) {
                 await new Promise(r => setTimeout(r, 20));
               }
 
               let url: string;
-              if (currentStream) {
-                await currentStream.close().catch(()=>{});
-                const file = await currentHandle.getFile();
+              if (state.fileStream) {
+                await state.fileStream.close().catch(()=>{});
+                const file = await state.fileHandle.getFile();
                 url = URL.createObjectURL(file);
               } else {
-                url = URL.createObjectURL(new Blob(currentBuffers));
+                state.buffers.sort((a: any, b: any) => a.offset - b.offset);
+                const rawBuffers = state.buffers.map((b: any) => b.chunk);
+                url = URL.createObjectURL(new Blob(rawBuffers));
               }
 
-              const a = document.createElement("a"); a.href = url; a.download = currentMeta.name;
+              const a = document.createElement("a"); a.href = url; a.download = state.meta.name;
               document.body.appendChild(a); a.click(); document.body.removeChild(a);
               setTimeout(() => URL.revokeObjectURL(url), 10000);
 
-              if (currentStream) {
+              if (state.fileStream) {
                 const root = await navigator.storage.getDirectory();
-                root.removeEntry(currentTid).catch(()=>{});
+                root.removeEntry(state.tid).catch(()=>{});
               }
-              upsertTransfer({ id: currentTid, peerId, name: currentMeta.name, size: currentMeta.size, progress: 100, direction: "receive", status: "done", paused: false });
-              addLog(`RECV ✓ ${currentMeta.name} complete`, "success");
+              upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 100, direction: "receive", status: "done", paused: false });
+              addLog(`RECV ✓ ${state.meta.name} complete`, "success");
             };
             finish().catch(console.error);
           }
-          recvCancelRef.current.delete(tid);
+          recvCancelRef.current.delete(state.tid);
         } else if (msg.type === "transfer-cancelled") {
-          cancelled = true;
-          if (tid) upsertTransfer({ id: tid, peerId, name: meta?.name ?? "", size: meta?.size ?? 0, progress: 0, direction: "receive", status: "error", paused: false });
-          addLog(`RECV ✕ transfer cancelled`, "error");
-          if (fileStream) { fileStream.close().catch(()=>{}); }
-          meta = null; buffers = [];
+          cancelFn(state); addLog(`RECV ✕ transfer cancelled`, "error");
         }
-      } else if (ev.data instanceof ArrayBuffer && !cancelled) {
-        buffers.push(ev.data);
-        if (fileStream) {
-          processQueue();
-        }
-        receivedBytes += ev.data.byteLength;
+      } else if (ev.data instanceof ArrayBuffer && !state.cancelled) {
+        const view = new DataView(ev.data);
+        const offset = view.getFloat64(0, true);
+        const chunk = ev.data.slice(8);
+
+        state.buffers.push({ offset, chunk });
+        state.receivedBytes += chunk.byteLength;
+        
+        if (state.fileStream) { processQueue(state); }
         
         let lastProgressTime = 0;
-        if (meta) {
+        if (state.meta) {
           const now = Date.now();
-          if (now - lastProgressTime > 50 || receivedBytes === meta.size) {
-            const speed = calcSpeed(tid, receivedBytes);
-            upsertTransfer({ id: tid, peerId, name: meta.name, size: meta.size, progress: Math.round((receivedBytes / meta.size) * 100), direction: "receive", status: "active", paused: false, speed });
+          if (now - lastProgressTime > 50 || state.receivedBytes === state.meta.size) {
+            const speed = calcSpeed(state.tid, state.receivedBytes);
+            upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: Math.min(100, Math.round((state.receivedBytes / state.meta.size) * 100)), direction: "receive", status: "active", paused: false, speed });
             lastProgressTime = now;
           }
         }
@@ -230,11 +223,12 @@ const Host = () => {
         setMembers((p) => p.includes(memberId) ? p : [...p, memberId]);
         addLog(`Peer connected: ${mu || memberId.slice(0, 8)}`, "success");
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        peerConnectionsRef.current.set(memberId, { pc, dataChannel: null });
+        const dcs: RTCDataChannel[] = [];
+        peerConnectionsRef.current.set(memberId, { pc, dataChannels: dcs });
         pc.ondatachannel = (ev) => {
           const dc = ev.channel; dc.binaryType = "arraybuffer";
           dc.onmessage = makeReceiveHandler(memberId);
-          peerConnectionsRef.current.set(memberId, { pc, dataChannel: dc });
+          dcs.push(dc);
         };
         pc.onicecandidate = (ev) => {
           if (ev.candidate) socket.send(JSON.stringify({ type: "ice-candidate", candidate: ev.candidate, targetId: memberId }));
@@ -335,15 +329,19 @@ const Host = () => {
 
   const sendFiles = async (peerId: string, files: File[]) => {
     const conn = peerConnectionsRef.current.get(peerId);
-    if (!conn || !conn.dataChannel) {
+    if (!conn || conn.dataChannels.length === 0) {
       addLog(`Cannot send: Connection not ready for ${peerId}`, "error");
       return;
     }
-    const dc = conn.dataChannel;
+    const dcs = conn.dataChannels;
 
-    const ensureOpen = () => dc.readyState === "open"
-      ? Promise.resolve()
-      : new Promise<void>((r) => { dc.onopen = () => r(); });
+    const ensureOpen = async () => {
+      for (const dc of dcs) {
+        if (dc.readyState !== "open") {
+          await new Promise<void>((r) => { dc.onopen = () => r(); });
+        }
+      }
+    };
 
     for (const file of files) {
       const tid = `send-${peerId}-${file.name}-${Date.now()}`;
@@ -353,7 +351,7 @@ const Host = () => {
       const filePath = (file as any).webkitRelativePath || file.name;
       try {
         await ensureOpen();
-        const { promise, control } = sendFileOverChannel(file, dc, filePath, (sent, total) => {
+        const { promise, control } = sendFileOverChannels(file, dcs, filePath, (sent, total) => {
           const speed = calcSpeed(tid, sent);
           upsertTransfer({ id: tid, peerId, name: file.name, size: total, progress: Math.round((sent / total) * 100), direction: "send", status: "active", paused: false, speed });
         });

@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 8080;
 const FRONTEND_DIST = path.join(__dirname, "../../frontend/dist");
-const HOST_GRACE_MS = 90_000;
+const HOST_GRACE_MS = 120_000;
 
 const MIME_TYPES = {
   ".html": "text/html",
@@ -212,7 +212,8 @@ const sendChatMessage = (ws, text) => {
 
 wss.on("connection", (ws) => {
   ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
+  ws.missedPings = 0;
+  ws.on('pong', () => { ws.isAlive = true; ws.missedPings = 0; });
   addUser(ws);
 
   ws.on("close", () => removeUser(ws));
@@ -253,9 +254,11 @@ wss.on("connection", (ws) => {
       case "close-room":
         closeRoomNow(webSocketToUserId.get(ws));
         break;
-      case "public-rooms":
-        ws.send(JSON.stringify({ type: "public-rooms", rooms: Object.fromEntries(rooms) }));
+      case "public-rooms": {
+        const activeRooms = [...rooms.entries()].filter(([id]) => !roomCloseTimers.has(id));
+        ws.send(JSON.stringify({ type: "public-rooms", rooms: Object.fromEntries(activeRooms) }));
         break;
+      }
       case "chat-message":
         sendChatMessage(ws, message.text);
         break;
@@ -282,8 +285,11 @@ wss.on("error", (e) => {
 const pingInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
-      removeUser(ws);
-      return ws.terminate();
+      ws.missedPings = (ws.missedPings || 0) + 1;
+      if (ws.missedPings >= 4) {
+        removeUser(ws);
+        return ws.terminate();
+      }
     }
     ws.isAlive = false;
     ws.ping();

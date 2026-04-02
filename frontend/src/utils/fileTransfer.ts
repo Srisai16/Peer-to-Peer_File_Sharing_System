@@ -58,8 +58,7 @@ export const getFilesFromDataTransfer = async (itemList: DataTransferItemList): 
 };
 
 
-const BUFFER_THRESHOLD = 8 * 1024 * 1024; // 8MB Maximum Saturation Buffer
-
+const BUFFER_THRESHOLD = 1 * 1024 * 1024; // 1MB Maximum Saturation Buffer
 export const sendFileOverChannels = (
   file: File,
   dataChannels: RTCDataChannel[],
@@ -79,7 +78,7 @@ export const sendFileOverChannels = (
     },
   };
 
-  dataChannels.forEach(dc => dc.bufferedAmountLowThreshold = 2 * 1024 * 1024);
+  dataChannels.forEach(dc => dc.bufferedAmountLowThreshold = 256 * 1024);
 
   const promise = (async () => {
     const meta: FileMeta = { type: "file-meta", name: file.name, path: filePath, size: file.size };
@@ -87,7 +86,7 @@ export const sendFileOverChannels = (
 
     const reader = file.stream().getReader();
     let offset = 0;
-    const CHUNK_SIZE = 128 * 1024; 
+    const CHUNK_SIZE = 256 * 1024; 
     let lastProgressTime = 0;
     let channelRotate = 0;
 
@@ -126,6 +125,7 @@ export const sendFileOverChannels = (
         }
 
         if (dcIndex === -1) {
+          await new Promise<void>(r => setTimeout(r, 5));
           await waitForAnyChannel();
           if (cancelled) { reader.cancel(); return; }
           continue;

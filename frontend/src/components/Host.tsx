@@ -124,7 +124,7 @@ const Host = () => {
           if (!state.cancelled && state.meta) {
             const finish = async () => {
               while (state.receivedBytes < state.meta.size || state.isWriting || (state.fileStream && state.buffers.length > 0)) {
-                await new Promise(r => setTimeout(r, 20));
+                await new Promise(r => setTimeout(r, 50));
               }
 
               let url: string;
@@ -172,6 +172,25 @@ const Host = () => {
             const speed = calcSpeed(state.tid, state.receivedBytes);
             upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: Math.min(100, Math.round((state.receivedBytes / state.meta.size) * 100)), direction: "receive", status: "active", paused: false, speed });
             lastProgressTime = now;
+          }
+          // Self-heal: If EOF was lost but we have all bytes, trigger finish
+          if (state.receivedBytes === state.meta.size && !state.fileStream && state.buffers.length > 0) {
+             state.isWriting = true;
+             setTimeout(() => {
+                if (state.receivedBytes === state.meta.size && !state.cancelled) {
+                   const finishBackup = async () => {
+                      state.buffers.sort((a: any, b: any) => a.offset - b.offset);
+                      const rawBuffers = state.buffers.map((b: any) => b.chunk);
+                      const url = URL.createObjectURL(new Blob(rawBuffers));
+                      const a = document.createElement("a"); a.href = url; a.download = state.meta.name;
+                      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                      setTimeout(() => URL.revokeObjectURL(url), 10000);
+                      upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 100, direction: "receive", status: "done", paused: false });
+                      addLog(`RECV ✓ ${state.meta.name} complete (Auto-finish)`, "success");
+                   };
+                   finishBackup().catch(console.error);
+                }
+             }, 2000);
           }
         }
       }

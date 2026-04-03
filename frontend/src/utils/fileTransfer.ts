@@ -58,7 +58,8 @@ export const getFilesFromDataTransfer = async (itemList: DataTransferItemList): 
 };
 
 
-const BUFFER_THRESHOLD = 1 * 1024 * 1024; // 1MB Maximum Saturation Buffer
+const BUFFER_THRESHOLD = 8 * 1024 * 1024;
+
 export const sendFileOverChannels = (
   file: File,
   dataChannels: RTCDataChannel[],
@@ -68,41 +69,47 @@ export const sendFileOverChannels = (
   let cancelled = false;
   let paused = false;
   let resumeFn: (() => void) | null = null;
+  const dc = dataChannels[0];
 
   const control: TransferControl = {
     pause: () => { paused = true; },
     resume: () => { paused = false; const fn = resumeFn; resumeFn = null; fn?.(); },
     cancel: () => {
       cancelled = true; paused = false; const fn = resumeFn; resumeFn = null; fn?.();
-      dataChannels[0]?.readyState === "open" && dataChannels[0].send(JSON.stringify({ type: "transfer-cancelled" }));
+      dc?.readyState === "open" && dc.send(JSON.stringify({ type: "transfer-cancelled" }));
     },
   };
 
-  dataChannels.forEach(dc => dc.bufferedAmountLowThreshold = 256 * 1024);
+  dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
 
   const promise = (async () => {
     const meta: FileMeta = { type: "file-meta", name: file.name, path: filePath, size: file.size };
-    dataChannels[0].send(JSON.stringify(meta)); // Metadata strictly runs over Channel 0
+    dc.send(JSON.stringify(meta));
 
     const reader = file.stream().getReader();
     let offset = 0;
     const CHUNK_SIZE = 256 * 1024; 
     let lastProgressTime = 0;
-    let channelRotate = 0;
 
-    const waitForAnyChannel = () => {
+    const waitForBuffer = () => {
       return new Promise<void>((resolve) => {
-        const listeners: { dc: RTCDataChannel; fn: () => void }[] = [];
-        const cleanup = () => listeners.forEach(({ dc, fn }) => dc.removeEventListener("bufferedamountlow", fn));
+        let interval: ReturnType<typeof setInterval>;
+        const fn = () => { cleanup(); resolve(); };
+        const cleanup = () => {
+          if (interval) clearInterval(interval);
+          dc.removeEventListener("bufferedamountlow", fn);
+        };
         
-        for (const dc of dataChannels) {
-          if (dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
-            cleanup(); resolve(); return;
-          }
-          const fn = () => { cleanup(); resolve(); };
-          dc.addEventListener("bufferedamountlow", fn);
-          listeners.push({ dc, fn });
+        if (dc.readyState !== "open" || dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
+           return resolve();
         }
+        
+        dc.addEventListener("bufferedamountlow", fn);
+        interval = setInterval(() => {
+          if (dc.readyState !== "open" || dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
+             cleanup(); resolve();
+          }
+        }, 50);
       });
     };
 
@@ -115,35 +122,17 @@ export const sendFileOverChannels = (
       while (chunkOffset < value.byteLength) {
         if (cancelled) { reader.cancel(); return; }
         if (paused) { await new Promise<void>((r) => { resumeFn = r; }); if (cancelled) return; }
+        if (dc.readyState !== "open") throw new Error("Channel closed");
 
-        let dcIndex = -1;
-        for (let i = 0; i < dataChannels.length; i++) {
-          const idx = (channelRotate + i) % dataChannels.length;
-          if (dataChannels[idx].readyState === "open" && dataChannels[idx].bufferedAmount <= BUFFER_THRESHOLD) {
-            dcIndex = idx; break;
-          }
-        }
-
-        if (dcIndex === -1) {
-          await new Promise<void>(r => setTimeout(r, 5));
-          await waitForAnyChannel();
+        if (dc.bufferedAmount > BUFFER_THRESHOLD) {
+          await waitForBuffer();
           if (cancelled) { reader.cancel(); return; }
-          continue;
         }
-
-        channelRotate = (dcIndex + 1) % dataChannels.length;
-        const dc = dataChannels[dcIndex];
 
         const end = Math.min(chunkOffset + CHUNK_SIZE, value.byteLength);
         const chunk = value.slice(chunkOffset, end);
         
-        // Multiplexing Header Injection (8 Bytes Double Float Offset + Binary)
-        const payload = new Uint8Array(8 + chunk.byteLength);
-        const view = new DataView(payload.buffer);
-        view.setFloat64(0, offset, true); // Little Endian
-        payload.set(new Uint8Array(chunk), 8);
-
-        dc.send(payload);
+        dc.send(chunk);
         
         chunkOffset += chunk.byteLength;
         offset += chunk.byteLength;
@@ -155,8 +144,6 @@ export const sendFileOverChannels = (
         }
       }
     }
-
-    dataChannels[0].send(JSON.stringify({ type: "EOF" }));
   })();
 
   return { promise, control };

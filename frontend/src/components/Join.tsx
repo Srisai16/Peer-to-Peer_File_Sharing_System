@@ -82,16 +82,55 @@ const Join = () => {
   }, []);
 
   const makeReceiveHandler = useCallback((peerId: string) => {
+    const triggerFinish = async (state: any) => {
+      if (state.cancelled || !state.meta || state.status === "done") return;
+      state.status = "done";
+      let url: string;
+      if (state.fileStream) {
+        try { await state.fileStream.close(); } catch(e) { console.error("close stream err", e); }
+        try {
+          const file = await state.fileHandle.getFile();
+          url = URL.createObjectURL(file);
+        } catch(e) { console.error("getFile err", e); return; }
+      } else {
+        const rawBuffers = state.buffers.map((b: any) => b.chunk);
+        url = URL.createObjectURL(new Blob(rawBuffers));
+      }
+      const a = document.createElement("a"); a.href = url; a.download = state.meta.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      const isOpfs = !!state.fileStream;
+      const tempTid = state.tid;
+      setTimeout(async () => {
+        URL.revokeObjectURL(url);
+        if (isOpfs && tempTid) {
+          try {
+            const root = await navigator.storage.getDirectory();
+            await root.removeEntry(tempTid);
+          } catch(e) {}
+        }
+      }, 300000);
+      upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 100, direction: "receive", status: "done", paused: false });
+      addLog(`RECV ✓ ${state.meta.name} complete`, "success");
+    };
+
     const processQueue = async (state: any) => {
-      if (state.isWriting || !state.fileStream || state.buffers.length === 0) return;
+      if (state.isWriting || (!state.fileStream && !state.opfsFailed)) return;
       state.isWriting = true;
       while (state.buffers.length > 0 && !state.cancelled) {
         const item = state.buffers.shift();
         if (item && state.fileStream) {
-          await state.fileStream.write({ type: "write", position: item.offset, data: item.chunk }).catch(console.error);
+          await state.fileStream.write(item.chunk).catch(console.error);
         }
       }
       state.isWriting = false;
+      
+      if (state.receivedBytes === state.meta?.size && state.buffers.length === 0 && !state.isFinishing) {
+         state.isFinishing = true;
+         triggerFinish(state);
+      } else if (state.opfsFailed && state.receivedBytes === state.meta?.size && !state.isFinishing) {
+         state.isFinishing = true;
+         triggerFinish(state);
+      }
     };
 
     const cancelFn = (state: any) => {
@@ -104,69 +143,46 @@ const Join = () => {
     return async (ev: MessageEvent) => {
       let state = receiverStateRef.current.get(peerId);
       if (!state) {
-        state = { meta: null, buffers: [], receivedBytes: 0, tid: "", cancelled: false, fileStream: null, fileHandle: null, isWriting: false };
+        state = { meta: null, buffers: [], receivedBytes: 0, tid: "", cancelled: false, fileStream: null, fileHandle: null, isWriting: false, opfsFailed: false };
         receiverStateRef.current.set(peerId, state);
       }
 
       if (typeof ev.data === "string") {
         const msg = JSON.parse(ev.data);
         if (msg.type === "file-meta") {
-          state.meta = msg as FileMeta; state.buffers = []; state.receivedBytes = 0; state.cancelled = false;
-          state.fileStream = null; state.fileHandle = null;
-          state.tid = `recv-${peerId}-${Date.now()}`;
+          state = {
+            meta: msg as FileMeta, buffers: [], receivedBytes: 0, tid: `recv-${peerId}-${Date.now()}`,
+            cancelled: false, fileStream: null, fileHandle: null, isWriting: false, opfsFailed: false, isFinishing: false, status: "active"
+          };
+          receiverStateRef.current.set(peerId, state);
+
           recvCancelRef.current.set(state.tid, () => cancelFn(state));
           upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 0, direction: "receive", status: "active", paused: false });
           addLog(`RECV ← ${state.meta.name} (${formatBytes(state.meta.size)})`, "info");
 
-          try {
-            const root = await navigator.storage.getDirectory();
-            state.fileHandle = await root.getFileHandle(state.tid, { create: true });
-            state.fileStream = await state.fileHandle.createWritable();
-          } catch (e) {}
+          (async () => {
+            try {
+              const root = await navigator.storage.getDirectory();
+              state.fileHandle = await root.getFileHandle(state.tid, { create: true });
+              state.fileStream = await state.fileHandle.createWritable();
+              processQueue(state);
+            } catch (e) {
+              state.opfsFailed = true;
+              processQueue(state);
+            }
+          })();
         } else if (msg.type === "EOF") {
-          if (!state.cancelled && state.meta) {
-            const finish = async () => {
-              while (state.receivedBytes < state.meta.size || state.isWriting || (state.fileStream && state.buffers.length > 0)) {
-                await new Promise(r => setTimeout(r, 50));
-              }
-
-              let url: string;
-              if (state.fileStream) {
-                await state.fileStream.close().catch(()=>{});
-                const file = await state.fileHandle.getFile();
-                url = URL.createObjectURL(file);
-              } else {
-                state.buffers.sort((a: any, b: any) => a.offset - b.offset);
-                const rawBuffers = state.buffers.map((b: any) => b.chunk);
-                url = URL.createObjectURL(new Blob(rawBuffers));
-              }
-
-              const a = document.createElement("a"); a.href = url; a.download = state.meta.name;
-              document.body.appendChild(a); a.click(); document.body.removeChild(a);
-              setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-              if (state.fileStream) {
-                const root = await navigator.storage.getDirectory();
-                root.removeEntry(state.tid).catch(()=>{});
-              }
-              upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 100, direction: "receive", status: "done", paused: false });
-              addLog(`RECV ✓ ${state.meta.name} complete`, "success");
-            };
-            finish().catch(console.error);
-          }
-          recvCancelRef.current.delete(state.tid);
+           // EOF ignored in favor of byte-level chunk completion checks
         } else if (msg.type === "transfer-cancelled") {
           cancelFn(state); addLog(`RECV ✕ transfer cancelled`, "error");
         }
       } else if (ev.data instanceof ArrayBuffer && !state.cancelled) {
-        const view = new DataView(ev.data);
-        const offset = view.getFloat64(0, true);
-        const chunk = ev.data.slice(8);
+        const chunk = ev.data;
 
-        state.buffers.push({ offset, chunk });
+        state.buffers.push({ chunk });
         state.receivedBytes += chunk.byteLength;
         
-        if (state.fileStream) { processQueue(state); }
+        processQueue(state);
         
         let lastProgressTime = 0;
         if (state.meta) {
@@ -175,25 +191,6 @@ const Join = () => {
             const speed = calcSpeed(state.tid, state.receivedBytes);
             upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: Math.min(100, Math.round((state.receivedBytes / state.meta.size) * 100)), direction: "receive", status: "active", paused: false, speed });
             lastProgressTime = now;
-          }
-          // Self-heal: If EOF was lost but we have all bytes, trigger finish
-          if (state.receivedBytes === state.meta.size && !state.fileStream && state.buffers.length > 0) {
-             state.isWriting = true;
-             setTimeout(() => {
-                if (state.receivedBytes === state.meta.size && !state.cancelled) {
-                   const finishBackup = async () => {
-                      state.buffers.sort((a: any, b: any) => a.offset - b.offset);
-                      const rawBuffers = state.buffers.map((b: any) => b.chunk);
-                      const url = URL.createObjectURL(new Blob(rawBuffers));
-                      const a = document.createElement("a"); a.href = url; a.download = state.meta.name;
-                      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                      setTimeout(() => URL.revokeObjectURL(url), 10000);
-                      upsertTransfer({ id: state.tid, peerId, name: state.meta.name, size: state.meta.size, progress: 100, direction: "receive", status: "done", paused: false });
-                      addLog(`RECV ✓ ${state.meta.name} complete (Auto-finish)`, "success");
-                   };
-                   finishBackup().catch(console.error);
-                }
-             }, 2000); // Wait 2s to see if EOF arrives properly
           }
         }
       }
@@ -211,11 +208,9 @@ const Join = () => {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const dcs: RTCDataChannel[] = [];
     peerConnectionRef.current.set(targetId, { pc, dataChannels: dcs });
-    for (let i = 0; i < 8; i++) {
-        const dc = pc.createDataChannel(`fileTransfer-${i}`, { ordered: true });
-        setupDataChannel(dc, targetId);
-        dcs.push(dc);
-    }
+    const dc = pc.createDataChannel(`fileTransfer-0`, { ordered: true });
+    setupDataChannel(dc, targetId);
+    dcs.push(dc);
     pc.onicecandidate = (e) => {
       if (e.candidate) socketRef.current?.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate, targetId }));
     };
@@ -401,11 +396,9 @@ const Join = () => {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const dcs: RTCDataChannel[] = [];
     peerConnectionRef.current.set(hostId, { pc, dataChannels: dcs });
-    for (let i = 0; i < 8; i++) {
-      const dc = pc.createDataChannel(`fileTransfer-${i}`, { ordered: true });
-      setupDataChannel(dc, hostId);
-      dcs.push(dc);
-    }
+    const dc = pc.createDataChannel(`fileTransfer-0`, { ordered: true });
+    setupDataChannel(dc, hostId);
+    dcs.push(dc);
     pc.onicecandidate = (ev) => {
       if (ev.candidate) socket.send(JSON.stringify({ type: "ice-candidate", candidate: ev.candidate, targetId: hostId }));
     };
